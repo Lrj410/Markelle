@@ -1,0 +1,43 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist.prev.*
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Local tooling / OS junk
+.codegraph/
+.workbuddy/
+*.pdb
+Thumbs.db
+Desktop.ini
+_audit_tmp.md
+*_tmp.md
+
+# Build artifacts — installers ship through GitHub Releases, not the repo history
+*.exe
+*.msi
+
+# Env secrets
+.env
+.env.*
+!.env.example

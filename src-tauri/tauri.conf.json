@@ -1,0 +1,73 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Markelle",
+  "version": "0.1.0",
+  "identifier": "com.markelle.reader",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Markelle",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 720,
+        "minHeight": 480,
+        "decorations": false,
+        "dragDropEnabled": true,
+        "visible": false,
+        "zoomHotkeysEnabled": false,
+        "backgroundColor": "#121416"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; base-uri 'none'; object-src 'none'; img-src 'self' https: mklasset: http://mklasset.localhost https://mklasset.localhost data: blob:; media-src 'self' https: mklasset: http://mklasset.localhost https://mklasset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost mklasset: http://mklasset.localhost https://mklasset.localhost http://127.0.0.1:* http://localhost:* https://127.0.0.1:* https://localhost:* http://[::1]:* https://[::1]:* http://192.168.*:* http://10.*:* http://172.16.*:* http://172.17.*:* http://172.18.*:* http://172.19.*:* http://172.2*.*:* http://172.3*.*:* http://*.local:* https://api.github.com",
+      "assetProtocol": {
+        "enable": false,
+        "scope": []
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "languages": ["SimpChinese", "English"],
+        "sidebarImage": "nsis/sidebar.bmp",
+        "headerImage": "nsis/header.bmp",
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "./windows/hooks.nsh"
+      }
+    },
+    "shortDescription": "本地优先 · 高性能 Markdown 知识库 / Local-first high-performance Markdown workspace",
+    "longDescription": "Markelle 是本地优先、高性能的 Markdown 知识库工作台：打开本机文件夹即知识库，支持阅读编辑、双链图谱、日记附件、历史版本与本地 AI 助手。数据不出本机，无云同步。 / Markelle is a local-first, high-performance Markdown knowledge workspace: open a folder as a vault for editing, graphing, capture, history, and local AI. No cloud sync.",
+    "fileAssociations": [
+      {
+        "ext": ["md", "markdown", "mdown", "mkd"],
+        "name": "Markelle.Markdown",
+        "description": "Markelle Markdown 文档",
+        "role": "Editor",
+        "mimeType": "text/markdown"
+      }
+    ]
+  }
+}

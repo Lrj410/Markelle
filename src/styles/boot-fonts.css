@@ -1,0 +1,20 @@
+/*
+  Boot-path font faces only.
+
+  Split out of reader-assets.css so the cold start does not pay for the reader
+  stack. app.css defines the font tokens and needs these two families available
+  from the first frame:
+    --font-ui / --font-doc → DM Sans      (shell, toolbar, welcome)
+    --font-mono            → JetBrains Mono (editor gutter, code chrome)
+
+  Everything else the reader needs — KaTeX, highlight.js, Source Serif 4
+  (--font-book) — ships in reader-assets.css, which MarkdownView imports when it
+  is lazily loaded.
+
+  NOTE: @font-face declarations are cheap; the font *files* are only fetched
+  when the family is actually used, so keeping a family here costs almost
+  nothing unless the UI renders text in it.
+*/
+@import "@fontsource-variable/dm-sans";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";

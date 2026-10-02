@@ -1,0 +1,78 @@
+/*
+  Source gutter type — isolated face so line numbers never fall through to
+  YaHei / Source Serif / proportional UI fonts (digits look “大小不一”).
+*/
+@font-face {
+  font-family: "MarkelleGutter";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src:
+    url("@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2")
+      format("woff2"),
+    url("@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff")
+      format("woff");
+}
+
+.source-pane .cm-editor .cm-gutters,
+.source-pane .cm-editor .cm-gutters .cm-gutter,
+.source-pane .cm-editor .cm-gutters .cm-gutterElement,
+.source-pane .cm-editor .cm-lineNumbers,
+.source-pane .cm-editor .cm-lineNumbers .cm-gutterElement,
+.source-pane .cm-editor .cm-activeLineGutter {
+  font-family: "MarkelleGutter", "Cascadia Mono", Consolas, "Courier New", monospace !important;
+  font-size: 12px !important;
+  font-weight: 400 !important;
+  font-style: normal !important;
+  font-optical-sizing: none !important;
+  font-variation-settings: normal !important;
+  font-variant-numeric: tabular-nums lining-nums !important;
+  font-feature-settings: "tnum" 1, "lnum" 1, "liga" 0, "calt" 0 !important;
+  letter-spacing: 0 !important;
+  text-rendering: geometricPrecision !important;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Keep number + (optional) fold columns side-by-side — never stacked under content. */
+.source-pane .cm-editor .cm-gutters {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  align-items: flex-start !important;
+  min-width: max-content !important;
+  width: auto !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+}
+
+.source-pane .cm-editor .cm-gutters .cm-gutter {
+  display: flex !important;
+  flex-direction: column !important;
+  flex-shrink: 0 !important;
+  min-width: 0;
+  /* CM sets per-line heights; never let content min-size inflate the column. */
+  min-height: 0 !important;
+}
+
+.source-pane .cm-editor .cm-lineNumbers {
+  min-width: max-content !important;
+}
+
+/*
+  Compact column; digits centered. min-height:0 + overflow:hidden is required —
+  flex items default min-height:auto and were growing past CM’s line height,
+  so the fold/number column spilled into empty space under short docs.
+*/
+.source-pane .cm-editor .cm-lineNumbers .cm-gutterElement {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 2.4ch !important;
+  min-height: 0 !important;
+  max-height: 100%;
+  padding: 0 6px !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  text-align: center !important;
+  line-height: 1 !important;
+}

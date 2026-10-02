@@ -1,0 +1,53 @@
+name: release
+
+# Tag-driven release (Windows only). Pushing a tag like `v0.1.0` builds the
+# Windows installer and attaches it to a GitHub Release. Unsigned unless the
+# optional signing secrets are provided (Windows: WINDOWS_CERTIFICATE /
+# WINDOWS_CERTIFICATE_PASSWORD).
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: windows-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: npm ci
+
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v0
+        # Code signing is opt-in. To enable it, provide the repository secrets used
+        # by your signing setup (e.g. a Windows certificate in the runner cert store
+        # plus `bundle.windows.certificateThumbprint`, or a custom `signCommand`),
+        # then uncomment the env block below. Without it the installers are unsigned
+        # and Windows SmartScreen will warn on first run.
+        # env:
+        #   WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+        #   WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Markelle ${{ github.ref_name }}"
+          releaseBody: |
+            Markelle v0.1.0 — Windows 安装包。
+
+            完整变更见仓库 CHANGELOG.md。
+            安装包未签名，首次运行 Windows SmartScreen 可能提示，选择“仍要运行”即可。
+          releaseDraft: false
+          prerelease: false
+          args: ""

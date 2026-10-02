@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/markelle.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Markelle</title>
+    <style>
+      /* Paint before JS/CSS bundles — kills WebView white/black flash */
+      html,
+      body,
+      #root {
+        margin: 0;
+        height: 100%;
+        background: #f0f1f3;
+        color: #1c1f24;
+      }
+      html[data-theme="dark"],
+      html[data-theme="dark"] body,
+      html[data-theme="dark"] #root {
+        background: #121416;
+        color: #e8eaed;
+      }
+      .boot-inline {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        font: 600 15px/1.2 "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+        letter-spacing: 0.04em;
+        color: #6b7280;
+      }
+      html[data-theme="dark"] .boot-inline {
+        color: #9aa0a8;
+      }
+      .boot-mark {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        background: currentColor;
+        color: #f0f1f3;
+        display: grid;
+        place-items: center;
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: -0.04em;
+      }
+      html[data-theme="dark"] .boot-mark {
+        background: #e8eaed;
+        color: #121416;
+      }
+      .boot-bar {
+        width: 96px;
+        height: 3px;
+        border-radius: 2px;
+        background: rgba(107, 114, 128, 0.25);
+        overflow: hidden;
+      }
+      .boot-bar > i {
+        display: block;
+        height: 100%;
+        width: 40%;
+        background: #14b8a6;
+        animation: boot-slide 1.1s ease-in-out infinite;
+      }
+      @keyframes boot-slide {
+        from {
+          transform: translateX(-120%);
+        }
+        to {
+          transform: translateX(320%);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-bar > i {
+          animation: none;
+          width: 100%;
+          transform: none;
+        }
+      }
+    </style>
+    <script>
+      (function () {
+        try {
+          var scheme = localStorage.getItem("markelle-scheme");
+          var dark =
+            scheme === "dark" ||
+            (scheme !== "light" &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.dataset.theme = dark ? "dark" : "light";
+        } catch (e) {
+          /* ignore */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root">
+      <div class="boot-inline" aria-busy="true">
+        <div class="boot-mark" aria-hidden="true">M</div>
+        <div>Markelle</div>
+        <div class="boot-bar" aria-hidden="true"><i></i></div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

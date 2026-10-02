@@ -1,0 +1,12 @@
+/*
+  Heavy reader assets — pulled in by MarkdownView (lazy), NOT on the cold path.
+
+  Imported from: src/components/MarkdownView.tsx
+  Do NOT import this from main.tsx: it drags ~55KB of KaTeX / highlight.js /
+  font CSS into the first paint of an app that may only ever show the welcome
+  screen. The two families the shell itself needs (DM Sans, JetBrains Mono) live
+  in boot-fonts.css instead.
+*/
+@import "katex/dist/katex.min.css";
+@import "highlight.js/styles/github.css";
+@import "@fontsource-variable/source-serif-4";
