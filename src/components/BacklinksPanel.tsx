@@ -6,7 +6,7 @@ import { useLocale } from "../hooks/useLocale";
 interface Props {
   vaultRoot: string | null;
   notePath: string | null;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, line?: number) => void;
 }
 
 export function BacklinksPanel({ vaultRoot, notePath, onOpenFile }: Props) {
@@ -85,7 +85,7 @@ export function BacklinksPanel({ vaultRoot, notePath, onOpenFile }: Props) {
           key={`${hit.path}:${hit.line}`}
           type="button"
           className="backlink-item"
-          onClick={() => onOpenFile(hit.path)}
+          onClick={() => onOpenFile(hit.path, hit.line > 0 ? hit.line : undefined)}
         >
           <span className="backlink-name">
             {hit.name}

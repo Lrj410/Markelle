@@ -252,6 +252,12 @@ export function ActivityBar({
       <div className="activity-group">
         {item("vault", t("panel.vault"), false, `${t("panel.vault")} Ctrl+B`)}
         {item("ai", t("panel.ai"), false, `${t("panel.ai")} Alt+A`)}
+        {item("toc", t("panel.toc"))}
+        {item("backlinks", t("panel.backlinks"))}
+        {item("tags", t("panel.tags"))}
+        {item("query", t("panel.query"))}
+        {item("history", t("panel.history"))}
+        {item("calendar", t("panel.calendar"))}
         {action("graph", t("panel.graph"), ICONS.graph, {
           active: graphOpen,
           disabled: !vaultOpen,

@@ -2491,6 +2491,23 @@ html[data-theme="dark"] .main-pane[data-mode="split"] {
   overflow: hidden;
 }
 
+.canvas-card-delete {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  z-index: 2;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  line-height: 1;
+  opacity: 0.72;
+}
+
+.canvas-card-delete:hover,
+.canvas-card-delete:focus-visible {
+  opacity: 1;
+}
+
 .canvas-card-handle {
   height: 18px;
   flex: 0 0 auto;
@@ -3377,6 +3394,11 @@ html[data-theme="dark"] .main-pane[data-mode="split"] {
   cursor: grab;
 }
 
+.graph-canvas:focus-visible {
+  outline: 2px solid var(--accent, #c45c26);
+  outline-offset: -2px;
+}
+
 .graph-canvas:active {
   cursor: grabbing;
 }
@@ -4041,6 +4063,7 @@ html[data-theme="dark"] .main-pane[data-mode="split"] {
   padding: 4px 0;
 }
 .cal-cell {
+  position: relative;
   aspect-ratio: 1;
   border: 0;
   border-radius: 8px;
@@ -4070,6 +4093,17 @@ html[data-theme="dark"] .main-pane[data-mode="split"] {
   background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
   font-weight: 650;
   animation: cal-today-in var(--dur-med, 240ms) var(--ease-spring, ease) both;
+}
+.cal-cell.has-note::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: var(--accent, #0d9488);
 }
 .cal-cell.empty {
   pointer-events: none;

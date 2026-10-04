@@ -8,9 +8,9 @@ import type { ReaderSettings } from "./types";
 // Loopback addresses: IPv4 127.0.0.1, localhost, IPv6 [::1]
 const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost|\[::1\]|localhost6)$/i;
 
-// Private LAN ranges: 192.168.x.x, 10.x.x.x, 172.16-31.x.x, *.local
+// Private LAN ranges: 192.168.x.x, 10.x.x.x, 172.16-31.x.x (literal IPs only — no *.local DNS)
 const LAN_HOST =
-  /^(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|[a-zA-Z0-9-]+\.local)$/i;
+  /^(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})$/i;
 
 export function assertAllowedUrl(baseUrl: string, allowLan = false): string {
   const trimmed = baseUrl.trim().replace(/\/$/, "");
@@ -41,7 +41,7 @@ export function assertAllowedUrl(baseUrl: string, allowLan = false): string {
 
   if (allowLan) {
     throw new Error(
-      "本地/局域网 AI 仅允许连接本机 (127.0.0.1 / localhost / [::1]) 或局域网私有网段 (192.168.x, 10.x, 172.16-31.x, *.local)",
+      "本地/局域网 AI 仅允许连接本机 (127.0.0.1 / localhost / [::1]) 或局域网私有网段字面量 IP (192.168.x, 10.x, 172.16-31.x)",
     );
   }
 

@@ -44,7 +44,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Markelle ${{ github.ref_name }}"
           releaseBody: |
-            Markelle v0.1.0 — Windows 安装包。
+            Markelle ${{ github.ref_name }} — Windows 安装包。
 
             完整变更见仓库 CHANGELOG.md。
             安装包未签名，首次运行 Windows SmartScreen 可能提示，选择“仍要运行”即可。

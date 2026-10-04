@@ -42,6 +42,8 @@ interface Props {
   lineWidth: number;
   dark: boolean;
   vaultFiles?: VaultFile[];
+  /** When true, keep remote https images in the reader (default false). */
+  allowRemoteHttpMedia?: boolean;
   /** Bumps when vault index identity changes so wikilinks re-resolve. */
   vaultEpoch?: string;
   /** Paginate preview for large files (never render full 1GB HTML). */
@@ -80,6 +82,7 @@ function MarkdownViewInner({
   lineWidth,
   dark,
   vaultFiles,
+  allowRemoteHttpMedia = false,
   vaultEpoch,
   paged = false,
   largeDoc,
@@ -233,6 +236,7 @@ function MarkdownViewInner({
               vaultFiles,
               toAssetUrl: toGatedAssetUrl,
               mediaPaths,
+              allowRemoteHttpMedia,
             });
             return [file.path, body] as const;
           } catch {
@@ -271,9 +275,10 @@ function MarkdownViewInner({
         vaultFiles,
         embedHtml,
         mediaPaths,
+        allowRemoteHttpMedia,
         toAssetUrl: toGatedAssetUrl,
       }),
-    [renderSource, baseDir, vaultRoot, vaultFiles, embedHtml, mediaPaths],
+    [renderSource, baseDir, vaultRoot, vaultFiles, embedHtml, mediaPaths, allowRemoteHttpMedia],
   );
 
   useEffect(() => {

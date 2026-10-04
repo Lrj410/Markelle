@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { formatBytes } from "./files";
+import { t } from "./i18n";
 
 export interface LargeFileProgress {
   path: string;
@@ -46,8 +47,19 @@ export function listenLargeFileProgress(
 
 export function formatHydrateStatus(p: LargeFileProgress): string {
   if (p.error) return p.error;
-  if (p.done) return `已完整加载 · ${formatBytes(p.size)} · ${p.lineCount} 行`;
+  if (p.done) {
+    return t("large.hydrateDone", {
+      size: formatBytes(p.size),
+      lines: p.lineCount,
+    });
+  }
   const pct = p.size > 0 ? Math.floor((p.bytesRead / p.size) * 100) : 0;
-  const ready = p.ready ? "可浏览 · " : "";
-  return `${ready}索引 ${pct}% · ${formatBytes(p.bytesRead)} / ${formatBytes(p.size)} · ${p.lineCount} 行`;
+  const ready = p.ready ? t("large.hydrateReady") : "";
+  return t("large.hydrateProgress", {
+    ready,
+    pct,
+    read: formatBytes(p.bytesRead),
+    total: formatBytes(p.size),
+    lines: p.lineCount,
+  });
 }

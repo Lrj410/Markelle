@@ -31,7 +31,11 @@ describe("ollama URL whitelist and LAN policies", () => {
     expect(assertAllowedUrl("http://192.168.1.50:11434", true)).toBe("http://192.168.1.50:11434");
     expect(assertAllowedUrl("http://10.0.0.12:8080", true)).toBe("http://10.0.0.12:8080");
     expect(assertAllowedUrl("http://172.20.0.5:1234", true)).toBe("http://172.20.0.5:1234");
-    expect(assertAllowedUrl("http://nas-ai.local:11434", true)).toBe("http://nas-ai.local:11434");
+  });
+
+  it("rejects *.local hostnames even when allowLan is true (DNS may resolve off-LAN)", () => {
+    expect(() => assertAllowedUrl("http://nas-ai.local:11434", true)).toThrow();
+    expect(() => assertAllowedUrl("http://evil.local:11434", true)).toThrow();
   });
 
   it("rejects public internet IPs even when allowLan is true", () => {

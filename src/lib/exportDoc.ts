@@ -1,5 +1,37 @@
 /** Print / HTML export helpers for the reader. */
 
+/** Strip absolute paths and internal schemes before sharing/printing. */
+export function sanitizeExportHtml(bodyHtml: string): string {
+  if (typeof document === "undefined") {
+    return bodyHtml
+      .replace(/\sdata-path="[^"]*"/gi, "")
+      .replace(/\shref="markelle-file:[^"]*"/gi, ' href="#"')
+      .replace(/\ssrc="mklasset:[^"]*"/gi, ' src=""')
+      .replace(/\ssrc="https?:\/\/mklasset\.localhost[^"]*"/gi, ' src=""');
+  }
+  const wrap = document.createElement("div");
+  wrap.innerHTML = bodyHtml;
+  wrap.querySelectorAll("[data-path]").forEach((el) => el.removeAttribute("data-path"));
+  wrap.querySelectorAll("a[href]").forEach((el) => {
+    const href = el.getAttribute("href") || "";
+    if (href.startsWith("markelle-file:") || href.startsWith("wikilink:")) {
+      el.setAttribute("href", "#");
+    }
+  });
+  wrap.querySelectorAll("[src]").forEach((el) => {
+    const src = el.getAttribute("src") || "";
+    if (
+      src.startsWith("mklasset:") ||
+      src.includes("mklasset.localhost") ||
+      src.startsWith("asset:")
+    ) {
+      el.setAttribute("src", "");
+      el.setAttribute("data-export-missing", "1");
+    }
+  });
+  return wrap.innerHTML;
+}
+
 export function buildExportHtml(opts: {
   title: string;
   bodyHtml: string;
@@ -15,13 +47,13 @@ export function buildExportHtml(opts: {
      --mk-page:#fdfbf5; --mk-ink:#201b15; --mk-ink-soft:#6b5f50;
      --mk-rule:rgba(38,31,23,0.18); --mk-fill:rgba(38,31,23,0.05);
      --mk-accent:#b4452b;`;
+  const safeBody = sanitizeExportHtml(opts.bodyHtml);
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>${title}</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css"/>
 <style>
   :root { ${theme} }
   body { font-family: "Source Serif 4", "Songti SC", Georgia, serif; line-height: 1.75; letter-spacing: 0.01em; max-width: 44rem; margin: 2.5rem auto; padding: 0 1.25rem; background: var(--mk-page); color: var(--mk-ink); }
@@ -57,7 +89,7 @@ export function buildExportHtml(opts: {
 </head>
 <body>
 <article class="md-export">
-${opts.bodyHtml}
+${safeBody}
 </article>
 </body>
 </html>`;
@@ -126,29 +158,41 @@ export async function embedLocalImagesInHtml(
 }
 
 export function printHtmlDocument(html: string): void {
-  const w = window.open("", "_blank");
-  if (!w) return;
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
-  w.focus();
+  // Prefer an iframe in the current WebView so print inherits app CSP,
+  // instead of an unconstrained about:blank popup + document.write.
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.cssText =
+    "position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none";
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument;
+  if (!doc) {
+    iframe.remove();
+    return;
+  }
+  doc.open();
+  doc.write(html);
+  doc.close();
+  const cleanup = () => {
+    try {
+      iframe.remove();
+    } catch {
+      /* ignore */
+    }
+  };
   try {
-    w.addEventListener("afterprint", () => {
-      try {
-        w.close();
-      } catch {
-        /* ignore */
-      }
-    });
+    iframe.contentWindow?.addEventListener("afterprint", cleanup);
   } catch {
     /* ignore */
   }
   window.setTimeout(() => {
     try {
-      w.print();
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
     } catch {
-      /* ignore */
+      cleanup();
     }
+    window.setTimeout(cleanup, 60_000);
   }, 250);
 }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n";
 import { useLocale } from "../hooks/useLocale";
+import { askConfirm } from "../lib/appConfirm";
 import {
   historyList,
   historyRead,
@@ -258,6 +259,11 @@ export function HistoryPanel({
                 className="btn primary"
                 onClick={() => {
                   void (async () => {
+                    const ok = await askConfirm(t("history.restoreConfirm"), {
+                      title: "Markelle",
+                      kind: "warning",
+                    });
+                    if (!ok) return;
                     const content = diffModal.snapContent;
                     setDiffModal(null);
                     await onRestore(content);
@@ -265,7 +271,7 @@ export function HistoryPanel({
                   })();
                 }}
               >
-                {t("history.restoreConfirm")}
+                {t("history.restore")}
               </button>
             </div>
           </div>

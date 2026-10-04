@@ -1,7 +1,7 @@
 {
   "name": "markelle",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "本地优先 · 高性能 Markdown 知识库 / Local-first high-performance Markdown knowledge workspace — vault, graph, capture, local AI",
   "type": "module",
   "scripts": {

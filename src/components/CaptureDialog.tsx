@@ -13,6 +13,7 @@ export function CaptureDialog({ open, onClose, onSave }: Props) {
   useLocale();
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const textRef = useRef(text);
@@ -31,6 +32,7 @@ export function CaptureDialog({ open, onClose, onSave }: Props) {
     if (!open) return;
     setText("");
     setSaving(false);
+    setError("");
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
@@ -38,10 +40,13 @@ export function CaptureDialog({ open, onClose, onSave }: Props) {
         if (!body || savingRef.current) return;
         savingRef.current = true;
         setSaving(true);
+        setError("");
         void (async () => {
           try {
             await onSave(body);
             onClose();
+          } catch (err) {
+            setError(err instanceof Error ? err.message : t("app.captureFailed"));
           } finally {
             savingRef.current = false;
             setSaving(false);
@@ -59,9 +64,12 @@ export function CaptureDialog({ open, onClose, onSave }: Props) {
     const body = text.trim();
     if (!body || saving) return;
     setSaving(true);
+    setError("");
     try {
       await onSave(body);
       onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("app.captureFailed"));
     } finally {
       setSaving(false);
     }
@@ -85,7 +93,13 @@ export function CaptureDialog({ open, onClose, onSave }: Props) {
           placeholder={t("capture.placeholder")}
           onChange={(e) => setText(e.target.value)}
         />
-        <p className="settings-hint">{t("capture.hint")}</p>
+        {error ? (
+          <p className="settings-hint" role="alert" style={{ color: "var(--danger, #b4452b)" }}>
+            {error}
+          </p>
+        ) : (
+          <p className="settings-hint">{t("capture.hint")}</p>
+        )}
         <div className="about-actions">
           <button type="button" className="btn ghost" onClick={onClose}>
             {t("common.close")}

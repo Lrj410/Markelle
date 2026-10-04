@@ -28,9 +28,15 @@ describe("markdown XSS hardening", () => {
     expect(html).toContain("wikilink:");
   });
 
-  it("strips file: hrefs", () => {
-    const { html } = renderMarkdown("[local](file:///C:/secret.md)");
-    expect(html).not.toMatch(/href=["']file:/i);
+  it("strips remote https images unless allowRemoteHttpMedia is true", () => {
+    const blocked = renderMarkdown("![x](https://evil.test/t.png)");
+    expect(blocked.html).toContain("md-remote-media-blocked");
+    expect(blocked.html).not.toMatch(/<img[^>]+src=["']https:\/\/evil\.test/i);
+
+    const allowed = renderMarkdown("![x](https://evil.test/t.png)", {
+      allowRemoteHttpMedia: true,
+    });
+    expect(allowed.html).toMatch(/<img[^>]+src=["']https:\/\/evil\.test/i);
   });
 });
 

@@ -474,7 +474,7 @@ export function AiAssistantPanel({
                 if (m.id !== assistantMsgId) return m;
                 const body = m.content.trim();
                 if (!body) return null;
-                return { ...m, content: `${body} [已中止生成]` };
+                return { ...m, content: `${body} ${t("ai.abortedSuffix")}` };
               })
               .filter((m): m is AiChatMessage => m != null),
           );
@@ -513,28 +513,29 @@ export function AiAssistantPanel({
     (action: "summarize" | "polish" | "continue" | "proofread" | "translate" | "tags") => {
       const target = getEffectiveContext();
       if (!target.trim()) {
-        onStatus?.("当前无可用文档或选区内容");
+        onStatus?.(t("ai.noContext"));
         return;
       }
       const opts = { embedSource: true as const };
+      const n = target.length;
       switch (action) {
         case "summarize":
-          void runPrompt(summarizePrompt(target), `总结当前内容（${target.length} 字）`, opts);
+          void runPrompt(summarizePrompt(target), t("ai.quickSummarize", { n }), opts);
           break;
         case "polish":
-          void runPrompt(polishPrompt(target), `润色当前文字（${target.length} 字）`, opts);
+          void runPrompt(polishPrompt(target), t("ai.quickPolish", { n }), opts);
           break;
         case "continue":
-          void runPrompt(continuePrompt(target), `续写下文内容（${target.length} 字）`, opts);
+          void runPrompt(continuePrompt(target), t("ai.quickContinue", { n }), opts);
           break;
         case "proofread":
-          void runPrompt(proofreadPrompt(target), `纠错校对（${target.length} 字）`, opts);
+          void runPrompt(proofreadPrompt(target), t("ai.quickProofread", { n }), opts);
           break;
         case "translate":
-          void runPrompt(translatePrompt(target), `翻译内容（${target.length} 字）`, opts);
+          void runPrompt(translatePrompt(target), t("ai.quickTranslate", { n }), opts);
           break;
         case "tags":
-          void runPrompt(extractTagsPrompt(target), `提炼双链与标签（${target.length} 字）`, opts);
+          void runPrompt(extractTagsPrompt(target), t("ai.quickTags", { n }), opts);
           break;
       }
     },
@@ -578,27 +579,27 @@ export function AiAssistantPanel({
     }
     clearCogniStackSessionState();
     setCogniMemoryCount(0);
-    onStatus?.("已清空对话与长期记忆上下文");
+    onStatus?.(t("ai.clearedMemory"));
   }, [STORAGE_KEY, onStatus]);
 
   const handleSaveWholeChat = useCallback(() => {
     if (!onCreateNote || messages.length === 0) return;
     const dateStr = new Date().toISOString().slice(0, 10);
     const timeStr = new Date().toTimeString().slice(0, 5).replace(":", "");
-    const title = `AI问答会话-${dateStr}-${timeStr}`;
-    let mdContent = `# ${title}\n\n- 日期：${new Date().toLocaleString()}\n- 引擎：${settings.aiEngineMode === "cognistack" ? "CogniStack 融合引擎" : "Markelle 内置记忆引擎"}\n- 模型：${settings.ollamaModel || "默认"}\n\n---\n\n`;
+    const title = `AI-${dateStr}-${timeStr}`;
+    let mdContent = `# ${title}\n\n- ${new Date().toLocaleString()}\n- ${settings.aiEngineMode === "cognistack" ? "CogniStack" : "Markelle"}\n- ${settings.ollamaModel || t("ai.modelDefault")}\n\n---\n\n`;
 
     for (const msg of messages) {
       if (msg.role === "user") {
-        mdContent += `### 🙋 用户提问\n\n${msg.content}\n\n`;
+        mdContent += `### User\n\n${msg.content}\n\n`;
       } else if (msg.role === "assistant") {
-        mdContent += `### 🤖 AI 回复\n\n${msg.content}\n\n---\n\n`;
+        mdContent += `### Assistant\n\n${msg.content}\n\n---\n\n`;
       }
     }
 
     onCreateNote(title, mdContent);
     setSavedAllNote(true);
-    onStatus?.("整场会话已成功沉淀保存为新笔记！");
+    onStatus?.(t("ai.chatSaved"));
     setTimeout(() => setSavedAllNote(false), 2000);
   }, [onCreateNote, messages, settings.aiEngineMode, settings.ollamaModel, onStatus]);
 
@@ -651,8 +652,8 @@ export function AiAssistantPanel({
   const handleCreateNote = (id: string, text: string) => {
     if (!onCreateNote) return;
     const dateStr = new Date().toISOString().slice(0, 10);
-    const stem = activeDocName ? activeDocName.replace(/\.md$/i, "") : "AI生成";
-    const title = `${stem}-AI成果-${dateStr}`;
+    const stem = activeDocName ? activeDocName.replace(/\.md$/i, "") : "AI";
+    const title = `${stem}-AI-${dateStr}`;
     onCreateNote(title, cleanOutput(text));
     setCreatedNoteId(id);
     onStatus?.(t("ai.created"));
@@ -675,13 +676,16 @@ export function AiAssistantPanel({
                 )}
                 title={
                   serverStatus.ok
-                    ? `已连接 ${serverStatus.provider || "本地服务"} · 模型: ${settings.ollamaModel || "默认"}`
-                    : "本地服务未响应，请检查 llama.cpp / Ollama 是否启动"
+                    ? t("ai.serverOk", {
+                        provider: serverStatus.provider || t("ai.localProvider"),
+                        model: settings.ollamaModel || t("ai.modelDefault"),
+                      })
+                    : t("ai.serverDown")
                 }
               >
                 <span className="ai-status-dot" />
                 <span className="ai-status-name">
-                  {serverStatus.provider || "本地 AI"}
+                  {serverStatus.provider || t("ai.localProvider")}
                 </span>
                 <span className="ai-status-model">
                   {settings.ollamaModel ? `(${settings.ollamaModel})` : ""}
@@ -700,16 +704,16 @@ export function AiAssistantPanel({
                 title={
                   settings.aiEngineMode === "cognistack"
                     ? cogniStatus.ok
-                      ? `CogniStack 引擎在线 (${settings.cogniStackUrl})`
-                      : `CogniStack 网关未连通 (${settings.cogniStackUrl})`
-                    : "Markelle 内置智能记忆引擎"
+                      ? t("ai.cogniOnline", { url: settings.cogniStackUrl })
+                      : t("ai.cogniOffline", { url: settings.cogniStackUrl })
+                    : t("ai.builtinMemory")
                 }
               >
                 <span className="ai-status-dot" />
                 <span>
                   {settings.aiEngineMode === "cognistack"
                     ? "CogniStack"
-                    : "内置记忆"}
+                    : t("ai.memoryShort")}
                 </span>
               </span>
               {settings.aiEngineMode === "cognistack" && (
@@ -731,16 +735,16 @@ export function AiAssistantPanel({
                         ? "color-mix(in srgb, var(--color-primary) 35%, transparent)"
                         : "var(--line)",
                   }}
-                  title="点击打开 CogniStack 长期记忆中枢与水位看板"
+                  title={t("ai.cogniOpenTitle")}
                 >
-                  <span>记忆库: {cogniMemoryCount} 块</span>
+                  <span>{t("ai.memoryBlocks", { n: cogniMemoryCount })}</span>
                 </button>
               )}
             </>
           ) : (
             <span className="ai-status-pill is-disabled">
               <span className="ai-status-dot" />
-              <span>未启用本地 AI</span>
+              <span>{t("ai.disabled")}</span>
             </span>
           )}
         </div>
@@ -750,8 +754,8 @@ export function AiAssistantPanel({
               type="button"
               className="ai-icon-btn"
               onClick={handleSaveWholeChat}
-              title={savedAllNote ? "已保存笔记" : "将整场对话保存为新笔记"}
-              aria-label="存为对话笔记"
+              title={savedAllNote ? t("ai.savedNote") : t("ai.saveChat")}
+              aria-label={t("ai.saveChatAria")}
               style={{ color: savedAllNote ? "var(--color-primary)" : undefined }}
             >
               {savedAllNote ? <IconCheck size={14} /> : <IconNewNote size={14} />}
@@ -773,8 +777,8 @@ export function AiAssistantPanel({
               type="button"
               className="ai-icon-btn"
               onClick={onOpenSettings}
-              title="本地 AI 设置 (llama.cpp / Ollama / CogniStack)"
-              aria-label="AI 设置"
+              title={t("ai.settingsTitle")}
+              aria-label={t("ai.settingsAria")}
             >
               <IconSettings size={14} />
             </button>
@@ -802,7 +806,7 @@ export function AiAssistantPanel({
       {/* Context info pill */}
       {settings.ollamaEnabled && (
         <div className="ai-context-bar">
-          <label className="ai-context-toggle" title="将当前编辑内容作为大模型背景资料">
+          <label className="ai-context-toggle" title={t("ai.includeDocTitle")}>
             <input
               type="checkbox"
               checked={includeDoc}
@@ -810,10 +814,10 @@ export function AiAssistantPanel({
             />
             <span>
               {hasLiveSelection
-                ? `引用选中文本 (${liveSelectionLen} 字)`
+                ? t("ai.citeSelection", { n: liveSelectionLen })
                 : activeDocName
-                ? `关联当前文档: ${activeDocName}`
-                : "附带当前文档上下文"}
+                ? t("ai.linkDoc", { name: activeDocName })
+                : t("ai.includeDoc")}
             </span>
           </label>
         </div>
@@ -827,60 +831,60 @@ export function AiAssistantPanel({
             className="ai-chip-btn"
             disabled={generating}
             onClick={() => handleQuickAction("summarize")}
-            title="总结核心要点与大纲"
+            title={t("ai.quickSummarize", { n: "" })}
           >
             <IconSummarize />
-            <span>总结</span>
+            <span>{t("ai.actionSummarize")}</span>
           </button>
           <button
             type="button"
             className="ai-chip-btn"
             disabled={generating}
             onClick={() => handleQuickAction("polish")}
-            title="润色文字，增强文笔与清晰度"
+            title={t("ai.actionPolish")}
           >
             <IconPolish />
-            <span>润色</span>
+            <span>{t("ai.actionPolish")}</span>
           </button>
           <button
             type="button"
             className="ai-chip-btn"
             disabled={generating}
             onClick={() => handleQuickAction("continue")}
-            title="顺接上下文继续写"
+            title={t("ai.actionContinue")}
           >
             <IconContinue />
-            <span>续写</span>
+            <span>{t("ai.actionContinue")}</span>
           </button>
           <button
             type="button"
             className="ai-chip-btn"
             disabled={generating}
             onClick={() => handleQuickAction("proofread")}
-            title="纠正语法、错别字与语病"
+            title={t("ai.actionProofread")}
           >
             <IconProofread />
-            <span>纠错</span>
+            <span>{t("ai.actionProofread")}</span>
           </button>
           <button
             type="button"
             className="ai-chip-btn"
             disabled={generating}
             onClick={() => handleQuickAction("translate")}
-            title="中英智能双向互译"
+            title={t("ai.actionTranslate")}
           >
             <IconTranslate />
-            <span>翻译</span>
+            <span>{t("ai.actionTranslate")}</span>
           </button>
           <button
             type="button"
             className="ai-chip-btn"
             disabled={generating}
             onClick={() => handleQuickAction("tags")}
-            title="提炼双向链接与概念标签"
+            title={t("ai.actionTags")}
           >
             <IconTags />
-            <span>提炼双链</span>
+            <span>{t("ai.actionTags")}</span>
           </button>
         </div>
       )}
@@ -892,11 +896,9 @@ export function AiAssistantPanel({
             <div className="ai-placeholder-sparkle">
               <IconSparkles size={28} />
             </div>
-            <h4>本地大模型助手</h4>
-            <p>已就绪连接您的本地推理工具（llama.cpp / Ollama / LM Studio）。</p>
-            <p className="ai-placeholder-hint">
-              点击上方快捷指令，或在下方输入指令，与当前笔记进行深度创作与重构。
-            </p>
+            <h4>{t("ai.heroTitle")}</h4>
+            <p>{t("ai.heroBody")}</p>
+            <p className="ai-placeholder-hint">{t("ai.heroHint")}</p>
           </div>
         ) : (
           messages.map((msg) => (
@@ -909,7 +911,9 @@ export function AiAssistantPanel({
             >
               <div className="ai-message-header">
                 <span className="ai-message-role">
-                  {msg.role === "user" ? "你" : (serverStatus.provider || "AI 助手")}
+                  {msg.role === "user"
+                    ? t("ai.you")
+                    : serverStatus.provider || t("ai.assistantName")}
                 </span>
               </div>
               <div className="ai-message-content">
@@ -917,7 +921,9 @@ export function AiAssistantPanel({
                   <div
                     className="ai-markdown-rendered markdown-body"
                     dangerouslySetInnerHTML={{
-                      __html: renderMarkdown(msg.content || (generating ? "思考生成中…" : "")).html,
+                      __html: renderMarkdown(
+                        msg.content || (generating ? t("ai.thinking") : ""),
+                      ).html,
                     }}
                   />
                 ) : (
@@ -928,67 +934,64 @@ export function AiAssistantPanel({
               {/* Action buttons on Assistant reply */}
               {msg.role === "assistant" && msg.content && (
                 <div className="ai-message-actions">
-                  {/* Replace Whole Document - Always available when active note exists */}
                   {onReplaceContent && (
                     <button
                       type="button"
                       className="ai-msg-action-btn is-action-replace"
                       onClick={() => handleReplaceWhole(msg.id, msg.content)}
-                      title="用 AI 生成的内容直接覆盖替换当前整个文档文件"
+                      title={t("ai.replaceDoc")}
                     >
                       {replacedWholeId === msg.id ? (
                         <>
                           <IconCheck />
-                          <span>已替换全文</span>
+                          <span>{t("ai.replacedDoc")}</span>
                         </>
                       ) : (
                         <>
                           <IconReplaceDoc />
-                          <span>替换全文</span>
+                          <span>{t("ai.replaceDocBtn")}</span>
                         </>
                       )}
                     </button>
                   )}
 
-                  {/* Replace Selection - Available when user has selection */}
                   {onReplaceSelection && hasLiveSelection && (
                     <button
                       type="button"
                       className="ai-msg-action-btn"
                       onClick={() => handleReplaceSelection(msg.id, msg.content)}
-                      title="替换当前选中的文字片段"
+                      title={t("ai.replaceSel")}
                     >
                       {replacedSelId === msg.id ? (
                         <>
                           <IconCheck />
-                          <span>已替换选区</span>
+                          <span>{t("ai.replacedSel")}</span>
                         </>
                       ) : (
                         <>
                           <IconReplaceDoc />
-                          <span>替换选区</span>
+                          <span>{t("ai.replaceSelBtn")}</span>
                         </>
                       )}
                     </button>
                   )}
 
-                  {/* Insert at cursor */}
                   {onInsertText && (
                     <button
                       type="button"
                       className="ai-msg-action-btn"
                       onClick={() => handleInsert(msg.id, msg.content)}
-                      title="插入到当前文档光标所在位置"
+                      title={t("ai.insertCursor")}
                     >
                       {insertedId === msg.id ? (
                         <>
                           <IconCheck />
-                          <span>已插入</span>
+                          <span>{t("ai.inserted")}</span>
                         </>
                       ) : (
                         <>
                           <IconInsert />
-                          <span>插入光标</span>
+                          <span>{t("ai.insertCursorBtn")}</span>
                         </>
                       )}
                     </button>
@@ -999,30 +1002,29 @@ export function AiAssistantPanel({
                       type="button"
                       className="ai-msg-action-btn"
                       onClick={() => handleAppend(msg.id, msg.content)}
-                      title="追加到当前笔记末尾"
+                      title={t("ai.appendEnd")}
                     >
                       <IconContinue />
-                      <span>追加末尾</span>
+                      <span>{t("ai.appendEndBtn")}</span>
                     </button>
                   )}
 
-                  {/* Save as New Note */}
                   {onCreateNote && (
                     <button
                       type="button"
                       className="ai-msg-action-btn"
                       onClick={() => handleCreateNote(msg.id, msg.content)}
-                      title="在知识库中创建为独立新笔记"
+                      title={t("ai.saveAsNote")}
                     >
                       {createdNoteId === msg.id ? (
                         <>
                           <IconCheck />
-                          <span>已存为笔记</span>
+                          <span>{t("ai.savedAsNote")}</span>
                         </>
                       ) : (
                         <>
                           <IconNewNote />
-                          <span>存为新笔记</span>
+                          <span>{t("ai.saveAsNoteBtn")}</span>
                         </>
                       )}
                     </button>
@@ -1033,13 +1035,12 @@ export function AiAssistantPanel({
                     className="ai-msg-action-btn"
                     onClick={() => handleRetry(msg.id)}
                     disabled={generating}
-                    title="用同一指令重新生成"
+                    title={t("ai.retry")}
                   >
                     <IconSparkles size={12} />
-                    <span>重试</span>
+                    <span>{t("ai.retryBtn")}</span>
                   </button>
 
-                  {/* Copy */}
                   <button
                     type="button"
                     className="ai-msg-action-btn"
@@ -1049,12 +1050,12 @@ export function AiAssistantPanel({
                     {copiedId === msg.id ? (
                       <>
                         <IconCheck />
-                        <span>已复制</span>
+                        <span>{t("ai.copied")}</span>
                       </>
                     ) : (
                       <>
                         <IconCopy />
-                        <span>复制</span>
+                        <span>{t("ai.copy")}</span>
                       </>
                     )}
                   </button>
@@ -1104,14 +1105,12 @@ export function AiAssistantPanel({
         <div className="ai-memory-modal-overlay" onClick={() => setShowMemoryModal(false)}>
           <div className="ai-memory-modal" onClick={(e) => e.stopPropagation()}>
             <div className="ai-memory-modal-head">
-              <div className="ai-memory-modal-title">
-                CogniStack 长期记忆中枢
-              </div>
+              <div className="ai-memory-modal-title">{t("ai.memoryModalTitle")}</div>
               <button
                 type="button"
                 className="ai-icon-btn"
                 onClick={() => setShowMemoryModal(false)}
-                title="关闭"
+                title={t("ai.close")}
               >
                 ✕
               </button>
@@ -1119,39 +1118,47 @@ export function AiAssistantPanel({
 
             <div className="ai-memory-modal-stats">
               <div className="ai-memory-stat-card">
-                <span className="ai-memory-stat-label">长期记忆块</span>
-                <span className="ai-memory-stat-value">{cogniMemoryCount} 块</span>
+                <span className="ai-memory-stat-label">{t("ai.memoryStatBlocks")}</span>
+                <span className="ai-memory-stat-value">{cogniMemoryCount}</span>
               </div>
               <div className="ai-memory-stat-card">
-                <span className="ai-memory-stat-label">已沉淀轮次</span>
-                <span className="ai-memory-stat-value">{getCogniStackSessionState().summarizedCount} 轮</span>
+                <span className="ai-memory-stat-label">{t("ai.memoryStatRounds")}</span>
+                <span className="ai-memory-stat-value">
+                  {getCogniStackSessionState().summarizedCount}
+                </span>
               </div>
               <div className="ai-memory-stat-card">
-                <span className="ai-memory-stat-label">水位标记 ID</span>
+                <span className="ai-memory-stat-label">{t("ai.memoryStatWaterline")}</span>
                 <span className="ai-memory-stat-value ai-memory-stat-mono">
-                  {getCogniStackSessionState().summarizedThroughMessageId || "初始(未推进)"}
+                  {getCogniStackSessionState().summarizedThroughMessageId ||
+                    t("ai.memoryWaterlineInit")}
                 </span>
               </div>
             </div>
 
             <div className="ai-memory-modal-body">
               <div className="ai-memory-blocks-head">
-                <span>已沉淀的高密度五段式记忆块内容：</span>
+                <span>{t("ai.memoryBlocksHeading")}</span>
               </div>
               {getCogniStackSessionState().summaryBlocks.length === 0 ? (
                 <div className="ai-memory-empty">
-                  <p>暂未生成长期记忆块。</p>
-                  <p className="ai-memory-empty-tip">
-                    当对话达到批次设定（默认每 2 轮）时，CogniStack 会在后台自动提炼【硬事实】【时间线】【关系】【未决】【近期情节】，并折叠老对话避免触发紧急裁剪。
-                  </p>
+                  <p>{t("ai.memoryEmpty")}</p>
+                  <p className="ai-memory-empty-tip">{t("ai.memoryEmptyHint")}</p>
                 </div>
               ) : (
                 <div className="ai-memory-blocks-list">
                   {getCogniStackSessionState().summaryBlocks.map((blk, idx) => (
                     <div key={blk.id || idx} className="ai-memory-block-card">
                       <div className="ai-memory-block-meta">
-                        <span>记忆块 #{idx + 1} {blk.kind ? `(${blk.kind})` : ""}</span>
-                        <span>推进至: {blk.throughMessageId || "最新"}</span>
+                        <span>
+                          {t("ai.memoryBlockLabel", { n: idx + 1 })}
+                          {blk.kind ? ` (${blk.kind})` : ""}
+                        </span>
+                        <span>
+                          {t("ai.memoryThrough", {
+                            id: blk.throughMessageId || t("ai.memoryLatest"),
+                          })}
+                        </span>
                       </div>
                       <pre className="ai-memory-block-text">{blk.text}</pre>
                     </div>
@@ -1167,17 +1174,17 @@ export function AiAssistantPanel({
                 onClick={() => {
                   clearCogniStackSessionState();
                   setCogniMemoryCount(0);
-                  onStatus?.("CogniStack 长期记忆与水位已重置归零");
+                  onStatus?.(t("ai.memoryResetDone"));
                 }}
               >
-                清空重置记忆
+                {t("ai.memoryReset")}
               </button>
               <button
                 type="button"
                 className="btn primary small"
                 onClick={() => setShowMemoryModal(false)}
               >
-                完成并返回
+                {t("ai.memoryDone")}
               </button>
             </div>
           </div>

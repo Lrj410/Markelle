@@ -33,7 +33,7 @@ interface Props {
   vault: VaultInfo;
   activePath: string | null;
   busy?: boolean;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, line?: number) => void;
   onCloseVault: () => void;
   onRefresh: () => void;
   onNewNote?: (dir?: string) => void;
@@ -70,7 +70,7 @@ interface VaultRowProps {
   selectedPath: string | null;
   expanded: boolean;
   emptyLabel: string;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, line?: number) => void;
   onSelect: (path: string, kind: "dir" | "file") => void;
   onToggle: (path: string, depth: number) => void;
   onContextMenu: (e: MouseEvent, target: CtxTarget) => void;
@@ -241,7 +241,7 @@ function VaultSidebarInner({
   const debouncedQuery = useMemo(() => query.trim(), [query]);
 
   useEffect(() => {
-    if (debouncedQuery.length < 2) {
+    if (debouncedQuery.length < 1) {
       setHits([]);
       setSearchError("");
       setSearching(false);
@@ -632,7 +632,7 @@ function VaultSidebarInner({
                   className={clsx("vault-hit", {
                     active: activePath != null && pathsEqual(hit.path, activePath),
                   })}
-                  onClick={() => onOpenFile(hit.path)}
+                  onClick={() => onOpenFile(hit.path, hit.line > 0 ? hit.line : undefined)}
                   onContextMenu={(e) =>
                     onContextMenu(e, {
                       path: hit.path,

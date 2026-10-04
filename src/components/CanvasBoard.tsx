@@ -21,8 +21,6 @@ export function CanvasBoard({ open, initialJson, onClose, onSave }: Props) {
   const [dragId, setDragId] = useState<string | null>(null);
   const dragOffset = useRef({ x: 0, y: 0 });
 
-  // Reset the board whenever it is (re)opened or the stored JSON changes, so a
-  // close/reopen never keeps stale edits and a saved doc is actually reloaded.
   useEffect(() => {
     if (!open) return;
     setDoc(initialJson ? parseCanvas(initialJson) : emptyCanvas());
@@ -40,11 +38,11 @@ export function CanvasBoard({ open, initialJson, onClose, onSave }: Props) {
   if (!open) return null;
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Canvas">
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={t("canvas.title")}>
       <button type="button" className="modal-backdrop" onClick={onClose} aria-label={t("common.close")} />
       <div className="modal-panel canvas-board-panel" ref={panelRef}>
         <div className="modal-head canvas-board-head">
-          <h2 className="canvas-board-title">Canvas</h2>
+          <h2 className="canvas-board-title">{t("canvas.title")}</h2>
           <button
             type="button"
             className="btn ghost"
@@ -109,6 +107,21 @@ export function CanvasBoard({ open, initialJson, onClose, onSave }: Props) {
                   setDragId(card.id);
                 }}
               />
+              <button
+                type="button"
+                className="btn ghost canvas-card-delete"
+                aria-label={t("canvas.deleteCard")}
+                title={t("canvas.deleteCard")}
+                onClick={() =>
+                  setDoc((d) => ({
+                    ...d,
+                    cards: d.cards.filter((c) => c.id !== card.id),
+                    updatedAt: Date.now(),
+                  }))
+                }
+              >
+                ×
+              </button>
               <textarea
                 className="canvas-card-text"
                 value={card.text}

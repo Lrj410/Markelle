@@ -12,10 +12,34 @@ import {
 import { tryNormalizeAllowedUrl } from "./ollama";
 
 const store = new LazyStore("markelle.json");
+/** API keys live in a separate store file so general settings export/debug is safer. */
+const secretsStore = new LazyStore("markelle.secrets.json");
 
 const SETTINGS_KEY = "settings";
 const RECENT_KEY = "recent";
+const SECRETS_KEY = "secrets";
 const MAX_RECENT = 20;
+
+type SecretsBlob = {
+  ollamaApiKey?: string;
+  cogniStackApiKey?: string;
+};
+
+async function loadSecretsBlob(): Promise<SecretsBlob> {
+  try {
+    return (await secretsStore.get<SecretsBlob>(SECRETS_KEY)) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveSecretsBlob(blob: SecretsBlob): Promise<void> {
+  await secretsStore.set(SECRETS_KEY, {
+    ollamaApiKey: blob.ollamaApiKey ?? "",
+    cogniStackApiKey: blob.cogniStackApiKey ?? "",
+  });
+  await secretsStore.save();
+}
 
 let recentCache: RecentEntry[] | null = null;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -86,6 +110,17 @@ function asBool(v: unknown, fallback: boolean): boolean {
 
 export async function loadSettings(): Promise<ReaderSettings> {
   const saved = (await store.get<StoredSettings>(SETTINGS_KEY)) ?? undefined;
+  const secrets = await loadSecretsBlob();
+
+  // Migrate keys that previously lived in the main settings blob.
+  const migratedOllamaKey =
+    (typeof secrets.ollamaApiKey === "string" && secrets.ollamaApiKey) ||
+    (typeof saved?.ollamaApiKey === "string" ? saved.ollamaApiKey : "") ||
+    DEFAULT_SETTINGS.ollamaApiKey;
+  const migratedCogniKey =
+    (typeof secrets.cogniStackApiKey === "string" && secrets.cogniStackApiKey) ||
+    (typeof saved?.cogniStackApiKey === "string" ? saved.cogniStackApiKey : "") ||
+    DEFAULT_SETTINGS.cogniStackApiKey;
 
   const merged: ReaderSettings = {
     ...DEFAULT_SETTINGS,
@@ -146,8 +181,7 @@ export async function loadSettings(): Promise<ReaderSettings> {
     captureTarget: saved?.captureTarget === "inbox" ? "inbox" : "daily",
     ollamaEnabled: asBool(saved?.ollamaEnabled, DEFAULT_SETTINGS.ollamaEnabled),
     ollamaAllowLan: asBool(saved?.ollamaAllowLan, DEFAULT_SETTINGS.ollamaAllowLan),
-    ollamaApiKey:
-      typeof saved?.ollamaApiKey === "string" ? saved.ollamaApiKey : DEFAULT_SETTINGS.ollamaApiKey,
+    ollamaApiKey: migratedOllamaKey,
     ollamaBaseUrl: (() => {
       const allowLan = asBool(saved?.ollamaAllowLan, DEFAULT_SETTINGS.ollamaAllowLan);
       if (typeof saved?.ollamaBaseUrl !== "string" || !saved.ollamaBaseUrl.trim()) {
@@ -171,10 +205,7 @@ export async function loadSettings(): Promise<ReaderSettings> {
         tryNormalizeAllowedUrl(saved.cogniStackUrl, allowLan) || DEFAULT_SETTINGS.cogniStackUrl
       );
     })(),
-    cogniStackApiKey:
-      typeof saved?.cogniStackApiKey === "string"
-        ? saved.cogniStackApiKey
-        : DEFAULT_SETTINGS.cogniStackApiKey,
+    cogniStackApiKey: migratedCogniKey,
     cogniStackTokenLimit:
       typeof saved?.cogniStackTokenLimit === "number" &&
       [4096, 8192, 16384, 32768, 65536].includes(saved.cogniStackTokenLimit)
@@ -217,6 +248,24 @@ export async function loadSettings(): Promise<ReaderSettings> {
   delete (merged as StoredSettings).showDesktopOrb;
   delete (merged as StoredSettings).showQuickOrb;
   delete (merged as StoredSettings).dockRightClearedV3;
+
+  // One-shot migration: move plaintext keys out of markelle.json when present.
+  const hadInlineSecrets =
+    (typeof saved?.ollamaApiKey === "string" && saved.ollamaApiKey.length > 0) ||
+    (typeof saved?.cogniStackApiKey === "string" && saved.cogniStackApiKey.length > 0);
+  if (hadInlineSecrets) {
+    try {
+      await saveSecretsBlob({
+        ollamaApiKey: migratedOllamaKey,
+        cogniStackApiKey: migratedCogniKey,
+      });
+      const scrubbed = { ...saved, ollamaApiKey: "", cogniStackApiKey: "" };
+      await store.set(SETTINGS_KEY, scrubbed);
+      await schedulePersist(true);
+    } catch {
+      /* best-effort migration */
+    }
+  }
 
   if (saved && !saved.dock) {
     let dock = merged.dock;
@@ -269,10 +318,17 @@ export async function saveSettings(settings: ReaderSettings): Promise<void> {
     autosaveDelayMs: clampAutosaveDelayMs(settings.autosaveDelayMs),
     recentPreviewCount: clampRecentPreviewCount(settings.recentPreviewCount),
     dockRightClearedV3: true,
+    // Never persist secrets in the main settings blob.
+    ollamaApiKey: "",
+    cogniStackApiKey: "",
   };
   delete payload.showDesktopOrb;
   delete payload.showQuickOrb;
 
+  await saveSecretsBlob({
+    ollamaApiKey: settings.ollamaApiKey,
+    cogniStackApiKey: settings.cogniStackApiKey,
+  });
   await store.set(SETTINGS_KEY, payload);
   await schedulePersist();
 }

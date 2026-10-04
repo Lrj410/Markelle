@@ -35,10 +35,14 @@ describe("parseEmbedSize", () => {
 });
 
 describe("media rendering", () => {
-  it("keeps remote https images", () => {
+  it("keeps remote https images when allowRemoteHttpMedia is true", () => {
     const { html } = renderMarkdown(
       "![remote](https://via.placeholder.com/640x200.png)",
-      { baseDir: "C:/vault/notes", toAssetUrl: toGatedAssetUrl },
+      {
+        baseDir: "C:/vault/notes",
+        toAssetUrl: toGatedAssetUrl,
+        allowRemoteHttpMedia: true,
+      },
     );
     expect(html).toContain('src="https://via.placeholder.com/640x200.png"');
     expect(html).not.toContain("mklasset:");
@@ -47,7 +51,11 @@ describe("media rendering", () => {
   it("promotes mp3 markdown images to audio", () => {
     const { html } = renderMarkdown(
       "![audio](https://example.com/a.mp3)",
-      { baseDir: "C:/vault", toAssetUrl: toGatedAssetUrl },
+      {
+        baseDir: "C:/vault",
+        toAssetUrl: toGatedAssetUrl,
+        allowRemoteHttpMedia: true,
+      },
     );
     expect(html).toMatch(/<audio[^>]+src="https:\/\/example.com\/a\.mp3"/);
     expect(html).not.toMatch(/<img[^>]+a\.mp3/);

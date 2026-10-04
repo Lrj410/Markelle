@@ -6,18 +6,30 @@ import { useLocale } from "../hooks/useLocale";
 interface Props {
   vaultRoot: string | null;
   dailyFolder: string;
+  /** YYYY-MM-DD notes that already exist under the daily folder. */
+  existingDates?: ReadonlySet<string> | string[];
   onOpenDate: (path: string, ymd: string) => void;
 }
 
 const DOW_ZH = ["一", "二", "三", "四", "五", "六", "日"];
 const DOW_EN = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 
-export function CalendarPanel({ vaultRoot, dailyFolder, onOpenDate }: Props) {
+export function CalendarPanel({
+  vaultRoot,
+  dailyFolder,
+  existingDates,
+  onOpenDate,
+}: Props) {
   const locale = useLocale();
   const today = new Date();
   const [cursor, setCursor] = useState(
     () => new Date(today.getFullYear(), today.getMonth(), 1),
   );
+
+  const existing = useMemo(() => {
+    if (!existingDates) return new Set<string>();
+    return existingDates instanceof Set ? existingDates : new Set(existingDates);
+  }, [existingDates]);
 
   const cells = useMemo(() => {
     const y = cursor.getFullYear();
@@ -39,8 +51,6 @@ export function CalendarPanel({ vaultRoot, dailyFolder, onOpenDate }: Props) {
   const todayYmd = formatDateYmd(today);
   const dows = locale === "en" ? DOW_EN : DOW_ZH;
 
-  // Group cells into weeks so the grid exposes proper `row` semantics. Inline
-  // `display: contents` keeps the flattened cells on the 7-column CSS grid.
   const weeks = useMemo(() => {
     const out: Array<Array<{ day: number | null; ymd: string | null }>> = [];
     for (let i = 0; i < cells.length; i += 7) out.push(cells.slice(i, i + 7));
@@ -96,8 +106,14 @@ export function CalendarPanel({ vaultRoot, dailyFolder, onOpenDate }: Props) {
                   key={c.ymd}
                   type="button"
                   role="gridcell"
-                  className={`cal-cell${c.ymd === todayYmd ? " today" : ""}`}
-                  aria-label={c.ymd!}
+                  className={`cal-cell${c.ymd === todayYmd ? " today" : ""}${
+                    existing.has(c.ymd!) ? " has-note" : ""
+                  }`}
+                  aria-label={
+                    existing.has(c.ymd!)
+                      ? `${c.ymd!} · note`
+                      : c.ymd!
+                  }
                   aria-current={c.ymd === todayYmd ? "date" : undefined}
                   onClick={() => {
                     const path = dailyNotePath(

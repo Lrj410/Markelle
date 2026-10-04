@@ -121,7 +121,7 @@ export function PropertiesStrip({ docKey, source, onSourceChange }: Props) {
         {t("props.kicker")}
       </span>
       <div className="props-strip-fields">
-        {entries.slice(0, 8).map(([key, value]) =>
+        {entries.map(([key, value]) =>
           editable ? (
             <label key={`${docKey}:${key}`} className="props-chip props-chip-edit">
               <em>{key}</em>

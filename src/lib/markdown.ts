@@ -360,8 +360,14 @@ export function renderMarkdown(
     embedHtml?: Record<string, string>;
     /** Resolved absolute paths for media targets (wiki + markdown images). */
     mediaPaths?: Record<string, string>;
+    /**
+     * When false (default), strip remote http(s) images/media to prevent
+     * tracking beacons in untrusted notes. data: URLs remain allowed.
+     */
+    allowRemoteHttpMedia?: boolean;
   } = {},
 ): RenderResult {
+  const allowRemoteHttpMedia = options.allowRemoteHttpMedia === true;
   const clipped =
     source.length > MAX_RENDER_CHARS
       ? `${source.slice(0, MAX_RENDER_CHARS)}\n\n<!-- markelle: truncated for render safety -->\n`
@@ -420,6 +426,18 @@ export function renderMarkdown(
     },
   );
 
+  // Always gate remote media (independent of baseDir / asset rewrite path).
+  if (!allowRemoteHttpMedia) {
+    html = html.replace(
+      /<img\s+([^>]*?)src="(https?:\/\/[^"]+)"([^>]*)>/gi,
+      (_full, before: string, url: string, after: string) => {
+        void before;
+        void after;
+        return `<span class="md-remote-media-blocked" title="remote media blocked">${engine.utils.escapeHtml(url.slice(0, 64))}</span>`;
+      },
+    );
+  }
+
   if (options.baseDir && options.toAssetUrl) {
     const { baseDir, toAssetUrl, vaultRoot } = options;
     const mediaPaths = options.mediaPaths;
@@ -452,7 +470,7 @@ export function renderMarkdown(
           return `<a ${before}href="markelle-file://${encodeURIComponent(abs)}" data-path="${esc}"${headingAttr}`;
         }
 
-        // Keep remote http(s) images/media as-is (CSP allows https:).
+        // Remote http(s)/data images — allow path already gated above when denied.
         if (
           tag === "img" &&
           (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:"))

@@ -69,13 +69,9 @@ export function scopeReaderCss(css: string): string {
     .replace(/behavior\s*:/gi, "/* behavior blocked */")
     .replace(/javascript\s*:/gi, "/* javascript blocked */")
     .replace(/vbscript\s*:/gi, "/* vbscript blocked */")
-    // Block remote/local/blob url() fetches from untrusted CSS (tracking / exfil).
-    .replace(/url\s*\(\s*[^)]*\)/gi, (m) =>
-      /https?:|data:|mklasset:|blob:|file:|\/\/|\\/i.test(m) ? "/* url blocked */" : m,
-    )
-    .replace(/image-set\s*\([^)]*\)/gi, (m) =>
-      /https?:|data:|mklasset:|blob:|file:|\/\/|\\/i.test(m) ? "/* image-set blocked */" : m,
-    );
+    // Block all url() / image-set() fetches from untrusted CSS (tracking / exfil / relative).
+    .replace(/url\s*\(\s*[^)]*\)/gi, "/* url blocked */")
+    .replace(/image-set\s*\([^)]*\)/gi, "/* image-set blocked */");
 
   // Reject brace imbalance so authors cannot close @scope and style chrome.
   let depth = 0;

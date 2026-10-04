@@ -77,9 +77,13 @@ if (!rootEl) {
   styles/boot-fonts.css for the split.
 */
 void import("./App").then(({ default: App }) => {
-  ReactDOM.createRoot(rootEl).render(
-    <React.StrictMode>
-      <App />
-    </React.StrictMode>,
-  );
+  void import("./components/ErrorBoundary").then(({ ErrorBoundary }) => {
+    ReactDOM.createRoot(rootEl).render(
+      <React.StrictMode>
+        <ErrorBoundary>
+          <App />
+        </ErrorBoundary>
+      </React.StrictMode>,
+    );
+  });
 });

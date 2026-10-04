@@ -2,6 +2,25 @@
 
 本项目所有值得注意的变更都记录在此。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.1] — 2026-10-04
+
+全仓库彻查后的安全与数据完整性迭代：堵住截断/双重加密等写盘风险，补齐图谱键盘与多窗提示，并隔离 API 密钥存储。
+
+### 安全与数据完整性
+- **保存守卫统一**：`documentGuards` 拦截 `truncated` / `backendBuffer` 预览写盘；`saveAs` 与 `saveFile` 对齐。
+- **加密会话**：加密后编辑器保留明文+口令（磁盘写密文）；Lock/Save 跳过已密文，避免双重加密；`saveAs` 有口令时加密后再写。
+- **重命名链接重构**：已打开的大文件改从磁盘全文改写，禁止把预览缓冲写回。
+- **API Key**：迁入独立 `markelle.secrets.json`，并从 `markelle.json`  scrub；设置导出更安全。
+- 多窗口打开同 path 前增加分叉覆盖确认。
+
+### 图谱
+- 画布可键盘操作：`+/-` 缩放、`0` 适应、方向键选择、Enter/空格打开；侧栏仍为完整可达路径。
+- 边计算改为最多扫描前 256KB；大图力导衰减加快，降低卡顿。
+
+### 工程
+- 根级与图谱区 ErrorBoundary；多窗 dirty 退出探测；CHANGELOG 与 Windows NSIS 发布说明一致。
+- 版本号同步为 `0.1.1`（`package.json` / `tauri.conf.json` / `Cargo.toml`）。
+
 ## [0.1.0] — 2026-10-03
 
 界面重做（墨纸设计语言）+ 四个维度（后端数据安全 / 安全边界 / 前端正确性 / 性能·无障碍·令牌一致性）的深度彻查与修复，全仓库死代码清理，以及**本地优先知识库 + 本地 AI** 产品定位落地。
@@ -41,5 +60,5 @@
 - 补齐 3 个「源码直接 import 但未声明」的幽灵依赖：`@codemirror/language`、`@codemirror/autocomplete`、`@lezer/highlight`。
 
 ### 工程
-- 新增 ESLint 与发布流水线（tag 驱动，Windows / macOS / Linux 三平台构建）。
+- 新增 ESLint 与发布流水线（tag 驱动；官方 Release 当前为 **Windows x64 NSIS**，macOS / Linux 可从源码按 Tauri 文档自行打包）。
 - 版本号在 `package.json`、`tauri.conf.json`、`Cargo.toml` 间同步为 `0.1.0`。

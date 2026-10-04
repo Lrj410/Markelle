@@ -416,6 +416,16 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                   />,
                 )}
                 {row(
+                  "settings.allowRemoteMedia",
+                  "settings.allowRemoteMediaDesc",
+                  <input
+                    type="checkbox"
+                    className="ui-switch"
+                    checked={settings.allowRemoteHttpMedia}
+                    onChange={(e) => onChange({ allowRemoteHttpMedia: e.target.checked })}
+                  />,
+                )}
+                {row(
                   "settings.sourceWrap",
                   null,
                   <input

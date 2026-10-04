@@ -104,6 +104,7 @@ import type { TocItem } from "./lib/toc";
 import { resolveHeadingId } from "./lib/toc";
 import type { ColorScheme, LayoutPreset } from "./lib/types";
 import { isDirty, isLargeTab, type DocTab } from "./lib/tabs";
+import { getWriteBlockReason } from "./lib/documentGuards";
 import {
   findTabByPath,
   isPathUnder,
@@ -229,6 +230,20 @@ function App() {
     [vault],
   );
 
+  const dailyExistingDates = useMemo(() => {
+    const folder = settings.dailyFolder.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+    const set = new Set<string>();
+    for (const file of vaultFiles) {
+      const rel = file.relative.replace(/\\/g, "/");
+      const prefix = folder ? `${folder}/` : "";
+      if (prefix && !rel.toLowerCase().startsWith(prefix.toLowerCase())) continue;
+      const name = prefix ? rel.slice(prefix.length) : rel;
+      const m = /^(\d{4}-\d{2}-\d{2})\.(md|markdown|mdown|mkd)$/i.exec(name);
+      if (m) set.add(m[1]!);
+    }
+    return set;
+  }, [vaultFiles, settings.dailyFolder]);
+
   const dark = useResolvedDark(settings.scheme);
   const active = useMemo(
     () => tabs.find((tab) => tab.id === activeId) ?? null,
@@ -237,7 +252,13 @@ function App() {
   const dirty = active ? isDirty(active) : false;
 
   const patchTab = useCallback((id: string, patch: Partial<DocTab>) => {
-    setTabs((prev) => prev.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab)));
+    setTabs((prev) => {
+      const next = prev.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab));
+      // Keep tabsRef in sync inside the updater so same-tick readers (multi-drop,
+      // AI apply, rapid open/save) never see a stale snapshot.
+      tabsRef.current = next;
+      return next;
+    });
   }, []);
 
   const patchActive = useCallback(
@@ -263,6 +284,7 @@ function App() {
       const note = tabsRef.current.find((tab) => tab.id === activeIdRef.current) ?? null;
       const cfg = settingsRef.current;
       if (!note || !cfg.ollamaEnabled) return;
+      const tabId = note.id;
 
       const controller = new AbortController();
       ollamaAbortRef.current = controller;
@@ -283,8 +305,12 @@ function App() {
         });
         const out = stripModelOutputFences(raw);
 
+        // Re-read the live tab after await — never apply against a stale snapshot.
+        const latest = tabsRef.current.find((tab) => tab.id === tabId);
+        if (!latest) return;
+
         if (opts.apply === "continue") {
-          if (hasSel && view) {
+          if (hasSel && view && !view.state.readOnly) {
             const { to } = view.state.selection.main;
             view.dispatch({
               changes: { from: to, insert: `\n\n${out}` },
@@ -292,13 +318,13 @@ function App() {
             });
             setStatus(opts.selectionDone || t("app.aiInserted"));
           } else {
-            patchActive({ content: `${note.content.trimEnd()}\n\n${out}\n` });
+            patchTab(tabId, { content: `${latest.content.trimEnd()}\n\n${out}\n` });
             setStatus(t("app.aiInserted"));
           }
           return;
         }
 
-        if (hasSel && view) {
+        if (hasSel && view && !view.state.readOnly) {
           const { from, to } = view.state.selection.main;
           const insert =
             opts.selectionInsertMode === "replace-with-newline" ? `${out}\n` : out;
@@ -317,9 +343,9 @@ function App() {
         if (opts.apply === "append-heading" || opts.apply === "replace-or-append") {
           const heading = opts.headingKey ? t(opts.headingKey) : "";
           const next = heading
-            ? `${note.content.trimEnd()}\n\n## ${heading}\n\n${out}\n`
-            : `${note.content.trimEnd()}\n\n${out}\n`;
-          patchActive({ content: next });
+            ? `${latest.content.trimEnd()}\n\n## ${heading}\n\n${out}\n`
+            : `${latest.content.trimEnd()}\n\n${out}\n`;
+          patchTab(tabId, { content: next });
           setStatus(t("app.aiInserted"));
         }
       } catch (e: unknown) {
@@ -333,7 +359,7 @@ function App() {
         setOllamaGenerating(false);
       }
     },
-    [patchActive],
+    [patchTab],
   );
 
 
@@ -1021,13 +1047,17 @@ function App() {
     [openPath],
   );
 
-  // Consume pending line jump once the active tab is in source mode.
+  // Consume pending line jump. Read mode switches to source so the editor can land.
   useEffect(() => {
     const line = pendingLineRef.current;
-    if (!line || !active || active.mode === "read") return;
+    if (!line || !active) return;
+    if (active.mode === "read") {
+      patchTab(active.id, { mode: "source" });
+      return;
+    }
     setScrollLine(line);
     pendingLineRef.current = null;
-  }, [active]);
+  }, [active, patchTab]);
 
   // Safety net: never leave tabs open with a stale/empty activeId (welcome stuck).
   useEffect(() => {
@@ -1100,13 +1130,14 @@ function App() {
 
   const saveFile = useCallback(async () => {
     if (!active) return;
-    if (active.truncated) {
+    const block = getWriteBlockReason(active);
+    if (block === "truncated") {
       setStatus(t("app.waitHydrateSave"));
       return;
     }
     // A backend-buffered tab keeps only a preview in `content`; the real text
     // lives in Rust. Writing `content` here would truncate the note on disk.
-    if (active.backendBuffer) {
+    if (block === "backendBuffer") {
       setStatus(t("app.largeReadOnlySave"));
       return;
     }
@@ -1149,7 +1180,12 @@ function App() {
 
         let toSave = latest.content;
         if (latest.cryptoPassphrase) {
-          toSave = await encryptNote(latest.content, latest.cryptoPassphrase);
+          if (isEncryptedNote(latest.content)) {
+            // Already ciphertext in the buffer — never wrap again.
+            toSave = latest.content;
+          } else {
+            toSave = await encryptNote(latest.content, latest.cryptoPassphrase);
+          }
         }
         const st = await writeMarkdownFile(path, toSave);
         setTabs((prev) =>
@@ -1200,8 +1236,14 @@ function App() {
 
   const saveAs = useCallback(async () => {
     if (!active) return;
-    if (active.truncated) {
+    const block = getWriteBlockReason(active);
+    if (block === "truncated") {
       setStatus(t("app.waitHydrateSaveAs"));
+      return;
+    }
+    // Preview-only buffers must not be written as complete files.
+    if (block === "backendBuffer") {
+      setStatus(t("app.largeReadOnlySave"));
       return;
     }
     const target = await saveDialog({
@@ -1234,14 +1276,26 @@ function App() {
       }
       // Write the latest in-memory content (edits made while the dialog was open are kept).
       const latest = tabsRef.current.find((t) => t.id === active.id);
-      await writeMarkdownFile(target, latest?.content ?? active.content);
+      let toWrite = latest?.content ?? active.content;
+      const pass = latest?.cryptoPassphrase ?? active.cryptoPassphrase;
+      if (pass && !isEncryptedNote(toWrite)) {
+        toWrite = await encryptNote(toWrite, pass);
+      }
+      await writeMarkdownFile(target, toWrite);
       const opened = await readMarkdownFile(target, true);
       const dir = dirname(opened.path);
+      // Keep an unlocked editing session if the source tab had a passphrase.
+      const keepPass = pass && isEncryptedNote(toWrite) ? pass : undefined;
+      const editorContent =
+        keepPass && isEncryptedNote(opened.content)
+          ? latest?.content ?? active.content
+          : opened.content;
       patchActive({
         path: opened.path,
         name: opened.name,
-        content: opened.content,
-        savedContent: opened.content,
+        content: editorContent,
+        savedContent: editorContent,
+        cryptoPassphrase: keepPass,
         baseDir: dir,
         size: opened.size,
         truncated: false,
@@ -1306,6 +1360,12 @@ function App() {
         kind: "warning",
       });
       if (!ok) return;
+    } else {
+      const ok = await askConfirm(t("app.confirmNewWindowFork"), {
+        title: "Markelle",
+        kind: "warning",
+      });
+      if (!ok) return;
     }
     try {
       await openPathInNewWindow(active.path);
@@ -1321,6 +1381,12 @@ function App() {
       if (!tab) return;
       if (isDirty(tab)) {
         const ok = await askConfirm(t("app.confirmNewWindowDirtyTab"), {
+          title: "Markelle",
+          kind: "warning",
+        });
+        if (!ok) return;
+      } else {
+        const ok = await askConfirm(t("app.confirmNewWindowFork"), {
           title: "Markelle",
           kind: "warning",
         });
@@ -1840,6 +1906,7 @@ function App() {
 
   // Backend vault FS watcher — refresh tree (and check open tab) after external edits.
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     let timer: number | undefined;
 
@@ -1862,10 +1929,12 @@ function App() {
         }
       }, 500);
     }).then((fn) => {
-      unlisten = fn;
+      if (cancelled) fn();
+      else unlisten = fn;
     });
 
     return () => {
+      cancelled = true;
       unlisten?.();
       if (timer != null) window.clearTimeout(timer);
     };
@@ -1873,16 +1942,20 @@ function App() {
 
   // Autosave dirty buffers after idle.
   useEffect(() => {
+    const snoozedForActive =
+      Boolean(active) &&
+      snoozedDiskRef.current?.path === active!.path;
     if (
       !settings.autosave ||
       !active ||
       !isDirty(active) ||
       active.truncated ||
       diskPromptRef.current ||
-      snoozedDiskRef.current?.mtimeMs === -1
+      snoozedForActive
     ) return;
     const timer = window.setTimeout(() => {
-      if (diskPromptRef.current || snoozedDiskRef.current?.mtimeMs === -1) return;
+      if (diskPromptRef.current) return;
+      if (snoozedDiskRef.current?.path === active.path) return;
       void saveFile();
     }, settings.autosaveDelayMs);
     return () => window.clearTimeout(timer);
@@ -2197,9 +2270,15 @@ function App() {
         id: "note-encrypt",
         label: t("cmdItem.encrypt"),
         group: t("cmdGroup.security"),
-        disabled: !active || Boolean(active.large) || isEncryptedNote(active.content),
+        disabled:
+          !active ||
+          Boolean(active.large) ||
+          isEncryptedNote(active.content) ||
+          Boolean(active.cryptoPassphrase),
         run: () => {
           if (!active || active.large) return;
+          const tabId = active.id;
+          const path = active.path;
           void (async () => {
             const pass = await askPrompt({
               masked: true,
@@ -2208,23 +2287,68 @@ function App() {
               placeholder: t("app.passwordPlaceholder"),
             });
             if (pass == null) return;
-            const enc = await encryptNote(active.content, pass);
-            await writeMarkdownFile(active.path, enc);
-            patchActive({ content: enc, savedContent: enc, cryptoPassphrase: pass });
-            const v = vaultRef.current;
-            if (v) {
-              try {
-                const n = await historyClearNote(v.root, active.path);
-                setStatus(
-                  n > 0
-                    ? t("app.encryptedClearedHistory", { n })
-                    : t("app.encrypted"),
-                );
-              } catch {
-                setStatus(t("app.encryptedClearFailed"));
+            if (pass.trim().length < 8) {
+              setStatus(t("app.encryptPassTooShort"));
+              return;
+            }
+            const pass2 = await askPrompt({
+              masked: true,
+              title: "Markelle",
+              message: t("app.encryptConfirmMessage"),
+              placeholder: t("app.passwordPlaceholder"),
+            });
+            if (pass2 == null) return;
+            if (pass2 !== pass) {
+              setStatus(t("app.encryptPassMismatch"));
+              return;
+            }
+
+            const run = async () => {
+              const tab = tabsRef.current.find((item) => item.id === tabId);
+              if (!tab || tab.path !== path) return;
+              if (isEncryptedNote(tab.content)) {
+                setStatus(t("app.alreadyEncrypted"));
+                return;
               }
-            } else {
-              setStatus(t("app.encrypted"));
+              // Disk gets ciphertext; editor keeps plaintext + passphrase so Save
+              // re-encrypts once (same model as unlock-after-decrypt).
+              const enc = await encryptNote(tab.content, pass);
+              const st = await writeMarkdownFile(path, enc);
+              patchTab(tabId, {
+                content: tab.content,
+                savedContent: tab.content,
+                cryptoPassphrase: pass,
+                diskMtimeMs: st.mtimeMs,
+                size: st.size,
+                encoding: "utf-8",
+              });
+              snoozedDiskRef.current = null;
+              const v = vaultRef.current;
+              if (v) {
+                try {
+                  const n = await historyClearNote(v.root, path);
+                  setStatus(
+                    n > 0
+                      ? t("app.encryptedClearedHistory", { n })
+                      : t("app.encrypted"),
+                  );
+                } catch {
+                  setStatus(t("app.encryptedClearFailed"));
+                }
+              } else {
+                setStatus(t("app.encrypted"));
+              }
+            };
+
+            const queued = saveChainRef.current.then(run, run);
+            saveChainRef.current = queued.then(
+              () => undefined,
+              () => undefined,
+            );
+            try {
+              await queued;
+            } catch (err) {
+              setStatus(formatAppError(err));
             }
           })();
         },
@@ -2262,9 +2386,19 @@ function App() {
           if (!active || !pass) return;
           void (async () => {
             try {
-              const enc = await encryptNote(active.content, pass);
-              await writeMarkdownFile(active.path, enc);
-              patchActive({ content: enc, savedContent: enc, cryptoPassphrase: undefined });
+              // If the buffer is already ciphertext (legacy bad state), just clear the key.
+              const enc = isEncryptedNote(active.content)
+                ? active.content
+                : await encryptNote(active.content, pass);
+              const st = await writeMarkdownFile(active.path, enc);
+              patchActive({
+                content: enc,
+                savedContent: enc,
+                cryptoPassphrase: undefined,
+                diskMtimeMs: st.mtimeMs,
+                size: st.size,
+              });
+              snoozedDiskRef.current = null;
               setStatus(t("app.locked"));
             } catch (err) {
               setStatus(formatAppError(err));
@@ -2381,7 +2515,7 @@ function App() {
             buildPrompt: polishPrompt,
             apply: "replace-or-append",
             headingKey: "app.aiPolishHeading",
-            selectionDone: "选中文本已润色完成 (Ctrl+Z 可撤销)",
+            selectionDone: t("app.aiSelectionPolished"),
           });
         },
       },
@@ -2394,7 +2528,7 @@ function App() {
           void runEditorAiAction({
             buildPrompt: continuePrompt,
             apply: "continue",
-            selectionDone: "已在选区后顺畅续写内容",
+            selectionDone: t("app.aiSelectionContinued"),
           });
         },
       },
@@ -2408,7 +2542,7 @@ function App() {
             buildPrompt: proofreadPrompt,
             apply: "replace-or-append",
             headingKey: "app.aiProofreadHeading",
-            selectionDone: "选中文本纠错已替换完成 (Ctrl+Z 可撤销)",
+            selectionDone: t("app.aiSelectionProofread"),
           });
         },
       },
@@ -2422,7 +2556,7 @@ function App() {
             buildPrompt: translatePrompt,
             apply: "replace-or-append",
             headingKey: "app.aiTranslateHeading",
-            selectionDone: "选中文本已翻译替换 (Ctrl+Z 可撤销)",
+            selectionDone: t("app.aiSelectionTranslated"),
           });
         },
       },
@@ -2538,8 +2672,8 @@ function App() {
     component, so it is safe to depend on.
   */
   const openVaultFile = useCallback(
-    (path: string) => {
-      void openPath(path);
+    (path: string, line?: number) => {
+      void openPath(path, false, undefined, line && line > 0 ? { line } : undefined);
     },
     [openPath],
   );
@@ -2644,15 +2778,44 @@ function App() {
         if (!shouldRefactor) return;
 
         let totalUpdated = 0;
+        let skippedLarge = 0;
         const filePaths = Array.from(new Set(backlinks.map((b) => b.path)));
 
         for (const filePath of filePaths) {
           const openTab = tabsRef.current.find((t) => pathsEqual(t.path, filePath));
+          // Never rewrite from a truncated / backend-buffer preview — that would
+          // truncate the note on disk to the preview slice.
+          if (openTab && getWriteBlockReason(openTab)) {
+            try {
+              const file = await readMarkdownFile(filePath, true);
+              const updated = refactorAllLinks(file.content, oldPath, newPath);
+              if (updated !== file.content) {
+                await writeMarkdownFile(filePath, updated);
+                totalUpdated++;
+                skippedLarge++;
+              }
+            } catch {
+              /* ignore individual file io error */
+            }
+            continue;
+          }
           if (openTab) {
             const updated = refactorAllLinks(openTab.content, oldPath, newPath);
             if (updated !== openTab.content) {
-              patchTab(openTab.id, { content: updated });
-              totalUpdated++;
+              try {
+                const st = await writeMarkdownFile(filePath, updated);
+                patchTab(openTab.id, {
+                  content: updated,
+                  savedContent: updated,
+                  diskMtimeMs: st.mtimeMs,
+                  size: st.size,
+                });
+                totalUpdated++;
+              } catch {
+                // Fall back to dirty in-memory update if disk write fails.
+                patchTab(openTab.id, { content: updated });
+                totalUpdated++;
+              }
             }
           } else {
             try {
@@ -2669,7 +2832,14 @@ function App() {
         }
 
         if (totalUpdated > 0) {
-          setStatus(t("vault.refactoredLinks", { count: totalUpdated }));
+          setStatus(
+            skippedLarge > 0
+              ? t("vault.refactoredLinksLargeOpen", {
+                  count: totalUpdated,
+                  skipped: skippedLarge,
+                })
+              : t("vault.refactoredLinks", { count: totalUpdated }),
+          );
         }
       } catch (err) {
         setStatus(formatAppError(err));
@@ -2773,7 +2943,9 @@ function App() {
           <BacklinksPanel
             vaultRoot={vault?.root ?? null}
             notePath={active?.path ?? null}
-            onOpenFile={(path) => void openPath(path)}
+            onOpenFile={(path, line) =>
+              void openPath(path, false, undefined, line && line > 0 ? { line } : undefined)
+            }
           />
         );
       case "tags":
@@ -2787,7 +2959,9 @@ function App() {
         return (
           <QueryPanel
             vaultRoot={vault?.root ?? null}
-            onOpenFile={(path) => void openPath(path)}
+            onOpenFile={(path, line) =>
+              void openPath(path, false, undefined, line && line > 0 ? { line } : undefined)
+            }
           />
         );
       case "history":
@@ -2809,6 +2983,7 @@ function App() {
           <CalendarPanel
             vaultRoot={vault?.root ?? null}
             dailyFolder={settings.dailyFolder}
+            existingDates={dailyExistingDates}
             onOpenDate={(path, ymd) => {
               void (async () => {
                 try {
@@ -3056,29 +3231,31 @@ function App() {
               data-mode={graphOpen ? "graph" : (active?.mode ?? "idle")}
             >
               {graphOpen && vault ? (
-                <Suspense fallback={<div className="open-pending" aria-busy="true" />}>
-                  <GraphView
-                    vaultRoot={vault.root}
-                    focusPath={active?.path ?? null}
-                    mode={effectiveGraphScope}
-                    dark={dark}
-                    epoch={graphEpoch}
-                    localHops={settings.graphLocalHops}
-                    keepOpenOnNavigate={settings.graphKeepOpen}
-                    onLocalHopsChange={(hops) =>
-                      setSettings((s) => ({ ...s, graphLocalHops: hops }))
-                    }
-                    onKeepOpenChange={(keep) =>
-                      setSettings((s) => ({ ...s, graphKeepOpen: keep }))
-                    }
-                    onOpenFile={(path) => {
-                      if (!settingsRef.current.graphKeepOpen) setGraphOpen(false);
-                      void openPath(path);
-                    }}
-                    onBusy={setBusyStable}
-                    onStatus={setStatusStable}
-                  />
-                </Suspense>
+                <ErrorBoundary fallbackLabel={t("panel.graph")}>
+                  <Suspense fallback={<div className="open-pending" aria-busy="true" />}>
+                    <GraphView
+                      vaultRoot={vault.root}
+                      focusPath={active?.path ?? null}
+                      mode={effectiveGraphScope}
+                      dark={dark}
+                      epoch={graphEpoch}
+                      localHops={settings.graphLocalHops}
+                      keepOpenOnNavigate={settings.graphKeepOpen}
+                      onLocalHopsChange={(hops) =>
+                        setSettings((s) => ({ ...s, graphLocalHops: hops }))
+                      }
+                      onKeepOpenChange={(keep) =>
+                        setSettings((s) => ({ ...s, graphKeepOpen: keep }))
+                      }
+                      onOpenFile={(path) => {
+                        if (!settingsRef.current.graphKeepOpen) setGraphOpen(false);
+                        void openPath(path);
+                      }}
+                      onBusy={setBusyStable}
+                      onStatus={setStatusStable}
+                    />
+                  </Suspense>
+                </ErrorBoundary>
               ) : !active && openingFile ? (
                 <div className="open-pending" aria-busy="true" aria-live="polite">
                   <div className="open-pending-card">
@@ -3144,6 +3321,7 @@ function App() {
                         lineWidth={settings.lineWidth}
                         dark={dark}
                         vaultFiles={vaultFiles}
+                        allowRemoteHttpMedia={settings.allowRemoteHttpMedia}
                         vaultEpoch={vault ? `${vault.root}:${vault.fileCount}` : "none"}
                         largeDoc={
                           (active.backendBuffer || active.large) && active.path
@@ -3290,6 +3468,7 @@ function App() {
                             lineWidth={settings.lineWidth}
                             dark={dark}
                             vaultFiles={vaultFiles}
+                            allowRemoteHttpMedia={settings.allowRemoteHttpMedia}
                             vaultEpoch={vault ? `${vault.root}:${vault.fileCount}` : "none"}
                             largeDoc={
                               (active.backendBuffer || active.large) && active.path

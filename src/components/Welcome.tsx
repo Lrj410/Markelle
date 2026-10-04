@@ -133,7 +133,7 @@ export function Welcome({
                 </div>
                 <div className="welcome-card-info">
                   <span className="welcome-card-title">{t("welcome.newNote")}</span>
-                  <span className="welcome-card-hint">Draft a blank document</span>
+                  <span className="welcome-card-hint">{t("welcome.newNoteHint")}</span>
                 </div>
                 <kbd className="welcome-card-kbd">Ctrl+N</kbd>
               </button>
@@ -154,7 +154,7 @@ export function Welcome({
                 </div>
                 <div className="welcome-card-info">
                   <span className="welcome-card-title">{t("welcome.commandPalette")}</span>
-                  <span className="welcome-card-hint">Quick commands & search</span>
+                  <span className="welcome-card-hint">{t("welcome.cmdHint")}</span>
                 </div>
                 <kbd className="welcome-card-kbd">Ctrl+K</kbd>
               </button>

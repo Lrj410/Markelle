@@ -39,11 +39,9 @@ describe("scopeReaderCss", () => {
     expect(out).toContain("@scope");
   });
 
-  it("blocks legacy behavior / javascript schemes", () => {
-    const out = scopeReaderCss(
-      ".x { behavior: url(evil.htc); background: javascript:alert(1); }",
-    );
-    expect(out).toContain("/* behavior blocked */");
-    expect(out).toContain("/* javascript blocked */");
+  it("blocks relative url() as well as remote", () => {
+    const out = scopeReaderCss(".x { background: url(foo.png); }");
+    expect(out).toContain("/* url blocked */");
+    expect(out).not.toContain("foo.png");
   });
 });

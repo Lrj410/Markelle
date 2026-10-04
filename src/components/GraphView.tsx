@@ -651,9 +651,10 @@ export function GraphView({
         "y",
         forceY<SimNode>((d) => height / 2 + folderCluster(d.folder).cy * clusterSpan).strength(0.04),
       )
-      .alpha(hasSaved ? 0.16 : 0.88)
-      .alphaDecay(0.028)
-      .velocityDecay(0.36);
+      .alpha(hasSaved ? 0.16 : nCount > 500 ? 0.55 : 0.88)
+      // Large graphs settle faster — full force ticks dominate CPU more than layout quality.
+      .alphaDecay(nCount > 500 ? 0.055 : nCount > 250 ? 0.04 : 0.028)
+      .velocityDecay(nCount > 500 ? 0.45 : 0.36);
 
     simRef.current = sim;
     simRunningRef.current = true;
@@ -898,6 +899,84 @@ export function GraphView({
     kickDraw();
   };
 
+  const panToNode = useCallback(
+    (id: string) => {
+      const canvas = canvasRef.current;
+      const stage = stageRef.current;
+      const zoomer = zoomerRef.current;
+      const node = nodeByIdRef.current.get(id);
+      if (!canvas || !stage || !zoomer || !node || node.x == null || node.y == null) return;
+      const w = stage.clientWidth;
+      const h = stage.clientHeight;
+      const k = Math.max(transformRef.current.k, 1.05);
+      const transform = zoomIdentity.translate(w / 2 - node.x * k, h / 2 - node.y * k).scale(k);
+      select(canvas).call(zoomer.transform, transform);
+      transformRef.current = transform;
+      setSelected(id);
+      kickDraw();
+    },
+    [setSelected, kickDraw],
+  );
+
+  const zoomByFactor = useCallback((factor: number) => {
+    const canvas = canvasRef.current;
+    const zoomer = zoomerRef.current;
+    if (!canvas || !zoomer) return;
+    select(canvas).transition().duration(120).call(zoomer.scaleBy, factor);
+  }, []);
+
+  const moveSelection = useCallback(
+    (delta: number) => {
+      const nodes = listShown;
+      if (nodes.length === 0) return;
+      const cur = selectedId
+        ? nodes.findIndex(({ node }) => node.id === selectedId)
+        : -1;
+      const next = nodes[(cur + delta + nodes.length) % nodes.length];
+      if (!next) return;
+      panToNode(next.node.id);
+    },
+    [listShown, selectedId, panToNode],
+  );
+
+  const onCanvasKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+      if (e.key === "+" || e.key === "=") {
+        e.preventDefault();
+        zoomByFactor(1.2);
+        return;
+      }
+      if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        zoomByFactor(1 / 1.2);
+        return;
+      }
+      if (e.key === "0") {
+        e.preventDefault();
+        fitView();
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+        e.preventDefault();
+        moveSelection(1);
+        return;
+      }
+      if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+        e.preventDefault();
+        moveSelection(-1);
+        return;
+      }
+      if (e.key === "Enter" || e.key === " ") {
+        const n = selectedId ? nodeByIdRef.current.get(selectedId) : null;
+        if (n?.path) {
+          e.preventDefault();
+          onOpenFileRef.current(n.path);
+        }
+      }
+    },
+    [zoomByFactor, moveSelection, selectedId],
+  );
+
   const relayout = () => {
     const sim = simRef.current;
     const nodes = nodesRef.current;
@@ -925,22 +1004,6 @@ export function GraphView({
     transformRef.current = transform;
     setHover(focus.id);
     setSelected(focus.id);
-    kickDraw();
-  };
-
-  const panToNode = (id: string) => {
-    const canvas = canvasRef.current;
-    const stage = stageRef.current;
-    const zoomer = zoomerRef.current;
-    const node = nodeByIdRef.current.get(id);
-    if (!canvas || !stage || !zoomer || !node || node.x == null || node.y == null) return;
-    const w = stage.clientWidth;
-    const h = stage.clientHeight;
-    const k = Math.max(transformRef.current.k, 1.05);
-    const transform = zoomIdentity.translate(w / 2 - node.x * k, h / 2 - node.y * k).scale(k);
-    select(canvas).call(zoomer.transform, transform);
-    transformRef.current = transform;
-    setSelected(id);
     kickDraw();
   };
 
@@ -972,9 +1035,17 @@ export function GraphView({
         <canvas
           ref={canvasRef}
           className="graph-canvas"
+          tabIndex={0}
+          role="application"
           aria-label={t("graph.label")}
-          role="img"
+          aria-roledescription={t("graph.canvasRole")}
+          aria-keyshortcuts="Equal Minus Digit0 ArrowUp ArrowDown Enter"
+          aria-describedby="graph-canvas-kbd-hint"
+          onKeyDown={onCanvasKeyDown}
         />
+        <p id="graph-canvas-kbd-hint" className="sr-only">
+          {t("graph.canvasKeys")}
+        </p>
 
         <div className="graph-hud" role="toolbar" aria-label={t("graph.toolbar")}>
           {mode === "local" && (

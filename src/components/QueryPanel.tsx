@@ -5,7 +5,7 @@ import { useLocale } from "../hooks/useLocale";
 
 interface Props {
   vaultRoot: string | null;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, line?: number) => void;
 }
 
 export function QueryPanel({ vaultRoot, onOpenFile }: Props) {

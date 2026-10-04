@@ -26,8 +26,9 @@ Markelle 是**本地优先 · 高性能**的 Markdown 知识库工作台（阅�
 ## 内容安全策略（CSP）
 
 - `default-src` / `script-src` 均限定为 `'self'`，脚本侧无 `unsafe-inline` / `unsafe-eval`。
-- `img-src` / `media-src` 仅放行 `'self'`、`https:`、`data:`、`blob:` 与 `mklasset:`（**不含明文 `http:`**），降低"以图片请求外泄笔记内容"的风险。
+- `img-src` / `media-src` 仅放行 `'self'`、`https:`、`data:`、`blob:` 与 `mklasset:`（**不含明文 `http:`**）。阅读器默认**剥离**远程 https 图片；需在设置中显式开启「允许远程 https 图片」。
 - `style-src` 需 `'unsafe-inline'`（React 内联样式、KaTeX、插件 CSS 注入），已在构建中保留并注明原因。
+- `connect-src` 仅放行本机 loopback 与 `api.github.com`；局域网 AI 的连通性由应用层 URL 白名单强制（CSP 无法可靠表达 RFC1918）。
 - 多窗口权限拆分：`doc-*` 次级窗口通过独立 capability 授权，不再继承主窗口的敏感窗口权限。
 
 ## XSS / 内容
@@ -35,7 +36,7 @@ Markelle 是**本地优先 · 高性能**的 Markdown 知识库工作台（阅�
 - `markdown-it`：`html: false`。
 - Mermaid：`securityLevel: "strict"`，`htmlLabels: false`。
 - 链接点击 default-deny；渲染阶段丢弃 `javascript:` 等非白名单 scheme。
-- 插件：磁盘插件仅 CSS；`@scope` 包裹，阻断 `@import`、远程 `url()` 与不平衡括号。
+- 插件：磁盘插件仅 CSS；`@scope` 包裹，阻断 `@import`、**全部** `url()` / `image-set()` 与不平衡括号。
 - 渲染阶段丢弃 `file:` / `javascript:` 等非白名单 scheme。
 
 ## 插件
@@ -50,9 +51,9 @@ Markelle 是**本地优先 · 高性能**的 Markdown 知识库工作台（阅�
 ## 本地 AI 与局域网
 
 - 默认仅允许连接 loopback（`127.0.0.1` / `localhost` / `[::1]`）。
-- 「允许局域网私有端点」开启后，才可连接 RFC1918 私网与 `*.local`；公网 API 始终拒绝。
+- 「允许局域网私有端点」开启后，才可连接 RFC1918 **字面量 IP**（`192.168.x` / `10.x` / `172.16–31.x`）；**不接受** `*.local`（DNS 可能解析到公网）。公网 API 始终拒绝。
 - CogniStack 网关地址使用同一套白名单策略。
-- API Key / Bearer Token 仅存本机设置，请求发往用户配置的本地或局域网服务。
+- API Key / Bearer Token 存于独立的本机 `markelle.secrets.json`（与常规 `markelle.json` 设置分离）；请求仅发往用户配置的本地或局域网服务。
 
 ## 加密与更新
 

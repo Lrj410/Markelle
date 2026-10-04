@@ -17,6 +17,8 @@ pub(crate) const MAX_SEARCH_HITS: usize = 80;
 pub(crate) const MAX_SEARCH_FILE_BYTES: u64 = 1_500_000;
 /// Tag extraction only needs frontmatter + early body — avoid full-file decode on index build.
 const TAG_SCAN_BYTES: usize = 64 * 1024;
+/// Graph edges: wikilinks / md links are usually early; cap decode to bound CPU on large vaults.
+const GRAPH_SCAN_BYTES: usize = 256 * 1024;
 /// Cap streaming scan so a pathological file cannot stall search forever.
 const MAX_STREAM_SEARCH_LINES: usize = 2_000_000;
 
@@ -1171,7 +1173,10 @@ fn compute_graph_edges(index: &VaultIndex) -> Vec<(String, String)> {
         if !meta.is_file() || meta.len() > MAX_SEARCH_FILE_BYTES {
             continue;
         }
-        let Ok((content, _)) = read_decoded(path) else { continue };
+        let scan = (meta.len() as usize).min(GRAPH_SCAN_BYTES);
+        let Ok((content, _, _, _)) = read_decoded_range(path, 0, scan, None) else {
+            continue;
+        };
         let source_id = path_id(path);
         // One edge per unique target per source — repeated links must not multiply forces.
         let mut seen_targets = HashSet::new();
