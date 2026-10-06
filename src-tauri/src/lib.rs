@@ -5,12 +5,13 @@ mod instance;
 mod large_file;
 mod plugins;
 mod tray;
+mod util;
 mod vault_index;
 mod vault_ops;
 mod vault_watch;
 
 use access::{ensure_allowed, is_symlink, register_access, revoke_vault_access, AppState};
-use encoding_util::{encode_utf8, read_decoded};
+use encoding_util::read_decoded;
 use history::{history_clear_note, history_list, history_read, history_save_snapshot};
 use plugins::{get_user_plugins_dir, list_plugins, read_plugin_file};
 use serde::Serialize;
@@ -20,11 +21,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{Instant, SystemTime};
 use tauri::{Manager, State};
+use tray::{quit_app, set_tray_visible, setup_tray};
 use vault_index::{
     build_vault_graph, find_backlinks, list_vault_tags, open_vault, query_vault, search_vault,
     IndexCache, MAX_SEARCH_FILE_BYTES,
 };
-use tray::{quit_app, set_tray_visible, setup_tray};
 use vault_ops::{
     import_adjacent_file, list_vault_templates, read_allowed_bytes, resolve_vault_media,
     vault_create_dir, vault_delete, vault_import_file, vault_rename, vault_write_bytes_raw,
@@ -32,6 +33,13 @@ use vault_ops::{
 };
 
 const MAX_ASSET_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Hard ceiling for assets served via HTTP `Range` requests. Ranges exist so
+/// video seeking keeps working on media that exceeds the non-ranged cap, but
+/// without this ceiling the documented 128 MB limit would be unbounded (a large
+/// file could be pulled down as an unlimited series of ≤32 MB chunks). This is
+/// deliberately far above `MAX_ASSET_BYTES` — it only stops the truly absurd.
+const MAX_RANGED_ASSET_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Files above this size use the native memmap virtual stream document path.
 pub(crate) const LARGE_FILE_BYTES: u64 = 50 * 1024 * 1024;
 /// Bytes indexed on first open (line starts); not all sent to the WebView.
@@ -44,6 +52,13 @@ pub(crate) const HYDRATE_CHUNK_BYTES: u64 = 16 * 1024 * 1024;
 pub(crate) const ABSOLUTE_MAX_FILE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 /// Hard ceiling for a single markdown write via IPC (DoS / OOM guard).
 const MAX_MARKDOWN_WRITE_BYTES: usize = 500 * 1024 * 1024;
+/// In-memory bound for a `force_full` read. `force_full` is a correctness
+/// contract (the caller writes the result straight back), so we must never
+/// return truncated content — but materializing a multi-GB note as a raw buffer
+/// *plus* a decoded `String` would OOM. 300 MB keeps the worst case to a few
+/// hundred MB of RAM while covering any realistic note; beyond it we fail
+/// loudly instead. The chunked/large-file path is unaffected.
+const MAX_FORCE_FULL_BYTES: u64 = 300 * 1024 * 1024;
 
 /// How long the window may stay hidden waiting for the frontend's first paint.
 /// Past this we show it anyway — a process with no visible window looks dead.
@@ -56,14 +71,18 @@ static BOOT_T0: OnceLock<Instant> = OnceLock::new();
 /// Kept in release builds on purpose: this is the only way to tell whether a
 /// future regression sits before or after the WebView2 hand-off.
 pub(crate) fn boot_trace(msg: &str) {
-    let Some(path) =
-        std::env::var_os("MARKELLE_BOOT_TRACE").map(|_| std::env::temp_dir().join("markelle-boot.log"))
+    let Some(path) = std::env::var_os("MARKELLE_BOOT_TRACE")
+        .map(|_| std::env::temp_dir().join("markelle-boot.log"))
     else {
         return;
     };
     let elapsed = BOOT_T0.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0;
     let pid = std::process::id();
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         use std::io::Write;
         let _ = writeln!(file, "[pid {pid}] {elapsed:8.1}ms  {msg}");
     }
@@ -112,20 +131,7 @@ fn reveal_main_window(app: &tauri::AppHandle) {
 }
 
 fn percent_decode_to_path(encoded: &str) -> Option<PathBuf> {
-    let bytes = encoded.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
-            out.push(u8::from_str_radix(hex, 16).ok()?);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    let s = String::from_utf8(out).ok()?;
+    let s = util::percent_decode_str(encoded)?;
     if s.is_empty() {
         return None;
     }
@@ -237,14 +243,6 @@ pub(crate) fn file_name(path: &Path) -> String {
         .to_string()
 }
 
-fn meta_mtime_ms(meta: &fs::Metadata) -> u64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 fn file_size_hard_cap() -> u64 {
     ABSOLUTE_MAX_FILE_BYTES
 }
@@ -261,7 +259,24 @@ pub(crate) fn ensure_file_under_hard_cap(size: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn read_path(path: &Path, _force_full: bool) -> Result<OpenedFile, String> {
+/// Read a file into an [`OpenedFile`] payload.
+///
+/// `force_full` is a correctness contract, not a hint. The frontend's link-rename
+/// and quick-capture paths pass `true` and then write the returned `content` back
+/// to disk; if a large note came back as a truncated first-screen preview, that
+/// write would permanently truncate the note on disk. So `force_full` always wins
+/// over the [`LARGE_FILE_BYTES`] threshold — the 10 GB hard cap still applies.
+fn read_path(path: &Path, force_full: bool) -> Result<OpenedFile, String> {
+    read_path_with_threshold(path, force_full, LARGE_FILE_BYTES)
+}
+
+/// [`read_path`] with an injectable size threshold so the force-full decision is
+/// unit-testable without materializing a 50 MB fixture.
+fn read_path_with_threshold(
+    path: &Path,
+    force_full: bool,
+    large_threshold: u64,
+) -> Result<OpenedFile, String> {
     if is_symlink(path) {
         return Err("拒绝通过符号链接读取文件".into());
     }
@@ -271,29 +286,41 @@ fn read_path(path: &Path, _force_full: bool) -> Result<OpenedFile, String> {
     }
 
     let size = meta.len();
-    let mtime_ms = meta_mtime_ms(&meta);
+    let mtime_ms = util::meta_mtime_ms(&meta);
     ensure_file_under_hard_cap(size)?;
-    let large = size > LARGE_FILE_BYTES;
+    let large = size > large_threshold;
 
-    let (text, enc) = if large {
-        let (paint, enc, _, _, _) = encoding_util::read_large_open(
+    // `bytes_read` must be the raw byte offset consumed on disk, not the decoded
+    // UTF-8 length (`text.len()`), so hydrate can resume from the right place.
+    let (text, enc, truncated, bytes_read) = if large && !force_full {
+        let (paint, enc, _, indexed_end, _) = encoding_util::read_large_open(
             path,
             FIRST_CHUNK_BYTES as usize,
             FIRST_PAINT_BYTES as usize,
         )?;
-        (paint, enc)
+        (paint, enc, true, indexed_end)
     } else {
-        read_decoded(path)?
+        // Reaching here with a file past `large_threshold` means `force_full`.
+        // Refuse rather than allocate a multi-GB buffer + decoded String; a loud
+        // error is correct, silently truncating content the caller would write
+        // back is not.
+        if force_full && size > MAX_FORCE_FULL_BYTES {
+            return Err(format!(
+                "文件体积（{} MB）超出强制全量载入上限（{} MB），请改用分块读取。",
+                size / (1024 * 1024),
+                MAX_FORCE_FULL_BYTES / (1024 * 1024)
+            ));
+        }
+        let (text, enc) = read_decoded(path)?;
+        (text, enc, false, size)
     };
-
-    let bytes_read = text.len() as u64;
 
     Ok(OpenedFile {
         path: path.to_string_lossy().to_string(),
         name: file_name(path),
         content: text,
         size,
-        truncated: large,
+        truncated,
         encoding: enc,
         mtime_ms,
         bytes_read,
@@ -308,10 +335,12 @@ async fn read_markdown_file(
     force_full: Option<bool>,
 ) -> Result<OpenedFile, String> {
     let path_buf = PathBuf::from(&path);
+    // Authorize first: an existence check before `ensure_allowed` would leak
+    // whether an unauthorized path exists on disk.
+    ensure_allowed(&state, &path_buf)?;
     if !path_buf.exists() {
         return Err(format!("文件不存在: {}", path_buf.display()));
     }
-    ensure_allowed(&state, &path_buf)?;
     let force = force_full.unwrap_or(true);
 
     let path_clone = path_buf.clone();
@@ -320,24 +349,6 @@ async fn read_markdown_file(
         .map_err(|e| format!("读取任务失败: {e}"))??;
 
     Ok(opened)
-}
-
-/// Atomic UTF-8 write: temp file in the same directory, then rename over target.
-fn write_utf8_atomic(path: &Path, content: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).map_err(|e| format!("无法创建目录: {e}"))?;
-        }
-    }
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let stem = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("note.md");
-    let tmp = parent.join(format!(".{stem}.{}.tmp", unique_tmp_tag()));
-    let bytes = encode_utf8(content);
-    fs::write(&tmp, &bytes).map_err(|e| format!("无法写入临时文件: {e}"))?;
-    commit_atomic(&tmp, path)
 }
 
 /// Commit `tmp` over `path`, replacing it.
@@ -351,42 +362,56 @@ pub(crate) fn commit_atomic(tmp: &Path, path: &Path) -> Result<(), String> {
     let mut last: Option<std::io::Error> = None;
     for attempt in 0..5u32 {
         match fs::rename(tmp, path) {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                crate::vault_watch::note_self_write(path);
+                return Ok(());
+            }
             Err(e) => {
                 last = Some(e);
-                std::thread::sleep(std::time::Duration::from_millis(40 * u64::from(attempt + 1)));
+                std::thread::sleep(std::time::Duration::from_millis(
+                    40 * u64::from(attempt + 1),
+                ));
             }
         }
     }
 
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let stem = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("file");
+    let stem = path.file_name().and_then(|s| s.to_str()).unwrap_or("file");
     let backup = parent.join(format!(".{stem}.{}.bak", unique_tmp_tag()));
     if fs::rename(path, &backup).is_ok() {
         match fs::rename(tmp, path) {
             Ok(()) => {
                 let _ = fs::remove_file(&backup);
+                crate::vault_watch::note_self_write(path);
                 return Ok(());
             }
             Err(e) => {
-                // Put the original back so nothing is lost.
-                let _ = fs::rename(&backup, path);
+                // Put the original back so nothing is lost. If even the restore
+                // fails the note would silently disappear into the hidden `.bak`,
+                // so surface the absolute backup path instead of swallowing it.
+                if let Err(restore_err) = fs::rename(&backup, path) {
+                    let bak_abs = fs::canonicalize(&backup).unwrap_or_else(|_| backup.clone());
+                    return Err(format!(
+                        "无法保存文件: {e}；且原文件恢复失败（{restore_err}）。\
+                         原内容仍完整保留在：{}，请手动改回原名。",
+                        bak_abs.display()
+                    ));
+                }
                 last = Some(e);
             }
         }
     }
     Err(format!(
         "无法保存文件: {}（未改动原文件，内容已保留在 {}）",
-        last.map(|e| e.to_string()).unwrap_or_else(|| "未知错误".into()),
+        last.map(|e| e.to_string())
+            .unwrap_or_else(|| "未知错误".into()),
         tmp.display()
     ))
 }
 
 #[tauri::command]
 async fn write_markdown_file(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
     content: String,
@@ -402,19 +427,107 @@ async fn write_markdown_file(
     if path.exists() && is_symlink(&path) {
         return Err("拒绝写入符号链接".into());
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        write_utf8_atomic(&path, &content)?;
+    // Capture the granted ancestor now; the blocking thread re-verifies the
+    // parent just before writing to close the ACL check-to-use gap.
+    let container = {
+        let access = state
+            .access
+            .lock()
+            .map_err(|_| "访问控制锁失败".to_string())?;
+        access.containment_root(&path)
+    };
+    let stat = tauri::async_runtime::spawn_blocking(move || -> Result<FileStat, String> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).map_err(|e| format!("无法创建目录: {e}"))?;
+                if let Some(ref root) = container {
+                    access::verify_parent_within(root, parent)?;
+                }
+            }
+        }
+        util::write_utf8_atomic(&path, &content, "note.md")?;
         let meta = fs::metadata(&path).map_err(|e| format!("无法读取文件信息: {e}"))?;
         Ok(FileStat {
             path: path.to_string_lossy().to_string(),
             name: file_name(&path),
             size: meta.len(),
             is_large: meta.len() > LARGE_FILE_BYTES,
-            mtime_ms: meta_mtime_ms(&meta),
+            mtime_ms: util::meta_mtime_ms(&meta),
         })
     })
     .await
-    .map_err(|e| format!("保存任务失败: {e}"))?
+    .map_err(|e| format!("保存任务失败: {e}"))??;
+
+    // The watcher suppresses our own writes (`note_self_write`), so the vault
+    // index must be invalidated here or the next search/graph would be stale.
+    if let Some(cache) = app.try_state::<IndexCache>() {
+        cache.clear();
+    }
+    Ok(stat)
+}
+
+/// Append UTF-8 `content` to `path` and return the resulting file length.
+///
+/// Quick capture appends to notes that may be far larger than the in-memory
+/// preview window, so this streams the new bytes straight to disk instead of
+/// loading the whole note, appending, and rewriting it (which would round-trip a
+/// multi-GB file through RAM and IPC).
+#[tauri::command]
+async fn append_markdown_file(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    content: String,
+) -> Result<u64, String> {
+    // `content` comes straight from IPC — bound it like the write path so an
+    // oversized append cannot OOM the process.
+    if content.len() > MAX_MARKDOWN_WRITE_BYTES {
+        return Err(format!(
+            "内容过大，无法追加（上限 {} MB）",
+            MAX_MARKDOWN_WRITE_BYTES / (1024 * 1024)
+        ));
+    }
+    let path = PathBuf::from(&path);
+    ensure_allowed(&state, &path)?;
+    if is_symlink(&path) {
+        return Err("拒绝通过符号链接写入文件".into());
+    }
+    let container = {
+        let access = state
+            .access
+            .lock()
+            .map_err(|_| "访问控制锁失败".to_string())?;
+        access.containment_root(&path)
+    };
+    let len = tauri::async_runtime::spawn_blocking(move || -> Result<u64, String> {
+        use std::io::Write;
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).map_err(|e| format!("无法创建目录: {e}"))?;
+                if let Some(ref root) = container {
+                    access::verify_parent_within(root, parent)?;
+                }
+            }
+        }
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| format!("无法打开文件追加写入: {e}"))?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("追加写入失败: {e}"))?;
+        file.flush().map_err(|e| format!("追加内容落盘失败: {e}"))?;
+        crate::vault_watch::note_self_write(&path);
+        let meta = fs::metadata(&path).map_err(|e| format!("无法读取文件信息: {e}"))?;
+        Ok(meta.len())
+    })
+    .await
+    .map_err(|e| format!("追加任务失败: {e}"))??;
+
+    if let Some(cache) = app.try_state::<IndexCache>() {
+        cache.clear();
+    }
+    Ok(len)
 }
 
 #[tauri::command]
@@ -428,7 +541,7 @@ async fn stat_markdown_file(state: State<'_, AppState>, path: String) -> Result<
             name: file_name(&path),
             size: meta.len(),
             is_large: meta.len() > LARGE_FILE_BYTES,
-            mtime_ms: meta_mtime_ms(&meta),
+            mtime_ms: util::meta_mtime_ms(&meta),
         })
     })
     .await
@@ -520,12 +633,28 @@ pub fn run() {
             let total_len = meta.len();
             let mime = guess_asset_mime(&path);
 
-            let range_header = request
-                .headers()
-                .get("range")
-                .and_then(|v| v.to_str().ok());
+            let range_header = request.headers().get("range").and_then(|v| v.to_str().ok());
 
             if let Some(range_str) = range_header {
+                // Ranged responses stream in ≤32 MB chunks so video seeking works
+                // on media larger than `MAX_ASSET_BYTES`; that cap therefore applies
+                // to non-ranged (full) responses only. Ranged responses are bounded
+                // here by a separate, much larger ceiling so the limit is not
+                // effectively unbounded (see `MAX_RANGED_ASSET_BYTES`).
+                if total_len > MAX_RANGED_ASSET_BYTES {
+                    return tauri::http::Response::builder()
+                        .status(413)
+                        .header("Content-Type", "text/plain; charset=utf-8")
+                        .body(
+                            format!(
+                                "asset too large for ranged streaming ({} MB > {} MB cap)",
+                                total_len / (1024 * 1024),
+                                MAX_RANGED_ASSET_BYTES / (1024 * 1024)
+                            )
+                            .into_bytes(),
+                        )
+                        .unwrap_or_else(|_| deny_asset());
+                }
                 if let Some((start, end)) = parse_range(range_str, total_len) {
                     let chunk_len = (end - start + 1) as usize;
                     // Cap single-chunk buffer to avoid allocation spikes
@@ -559,6 +688,8 @@ pub fn run() {
                 }
             }
 
+            // Full (non-ranged) responses are capped at 128 MB; oversized media
+            // reaches the client through the ranged/streaming path above instead.
             if total_len > MAX_ASSET_BYTES {
                 return tauri::http::Response::builder()
                     .status(413)
@@ -594,6 +725,7 @@ pub fn run() {
             large_file::large_file_lines,
             large_file::large_file_close,
             write_markdown_file,
+            append_markdown_file,
             stat_markdown_file,
             open_vault,
             search_vault,
@@ -746,8 +878,15 @@ pub fn run() {
             boot_trace("setup: done (event loop free to pump WebView2)");
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Markelle");
+        .build(tauri::generate_context!())
+        .expect("error while building Markelle")
+        .run(|_app, event| {
+            // Process exit is the only place where tearing down *every* watcher
+            // is correct; closing one vault must not stop the others.
+            if let tauri::RunEvent::Exit = event {
+                vault_watch::stop_all_vault_watches();
+            }
+        });
 }
 
 #[cfg(test)]
@@ -789,6 +928,33 @@ mod tests {
             .filter(|n| n.ends_with(".bak"))
             .collect();
         assert!(leftovers.is_empty(), "unexpected backups: {leftovers:?}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `force_full` is the data-loss guard: link-rename / quick-capture read the
+    /// whole note and write it straight back, so it must never receive a preview.
+    #[test]
+    fn force_full_overrides_large_threshold() {
+        let dir = std::env::temp_dir().join(format!("mkl-read-full-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("big.md");
+        let body = "第一行\nsecond\nthird\n";
+        fs::write(&path, body).unwrap();
+        let size = body.len() as u64;
+
+        // Threshold of 1 byte makes the file "large" without a 50 MB fixture.
+        let full = read_path_with_threshold(&path, true, 1).unwrap();
+        assert!(full.large);
+        assert!(!full.truncated, "force_full must not truncate");
+        assert_eq!(full.content, body);
+        assert_eq!(full.bytes_read, size);
+
+        // Without force_full the same file is served as a truncated preview.
+        let preview = read_path_with_threshold(&path, false, 1).unwrap();
+        assert!(preview.large);
+        assert!(preview.truncated);
+        assert_eq!(preview.bytes_read, FIRST_CHUNK_BYTES.min(size));
 
         let _ = fs::remove_dir_all(&dir);
     }

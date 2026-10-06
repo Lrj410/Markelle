@@ -3,7 +3,9 @@
  * Connects to CogniStack gateway (default: http://127.0.0.1:7331).
  */
 
+import { getVersion } from "@tauri-apps/api/app";
 import { assertAllowedUrl } from "./ollama";
+import { t } from "./i18n";
 
 export interface SummaryBlock {
   id?: string;
@@ -200,8 +202,7 @@ export async function cogniStackCheckHealth(
     const msg = err instanceof Error ? err.message : String(err);
     let friendly = msg;
     if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
-      friendly =
-        "无法连通网关服务。若在当前电脑运行，推荐点击上方快捷按钮填入 http://127.0.0.1:7331";
+      friendly = t("ailib.gatewayUnreachable");
     }
     return { ok: false, error: friendly };
   }
@@ -230,12 +231,21 @@ export async function cogniStackPrepare(
     headers["Authorization"] = `Bearer ${opts.apiKey.trim()}`;
   }
 
+  // Report the real app version to the gateway (falls back to empty string in
+  // web preview / non-Tauri contexts where getVersion() rejects).
+  let hostVersion = "";
+  try {
+    hostVersion = await getVersion();
+  } catch {
+    /* non-Tauri / web preview */
+  }
+
   const body = {
     host: {
       id: "markelle",
       name: "Markelle",
       kind: "client",
-      version: "0.1.0",
+      version: hostVersion,
     },
     dialogue: opts.dialogue,
     summaryBlocks: opts.summaryBlocks,
@@ -264,7 +274,10 @@ export async function cogniStackPrepare(
         ok: false,
         messages: opts.dialogue,
         shouldSummarize: false,
-        error: `CogniStack 响应错误 (${res.status}): ${errText || res.statusText}`,
+        error: t("ailib.gatewayResponseError", {
+          status: res.status,
+          detail: errText || res.statusText,
+        }),
       };
     }
 
@@ -323,7 +336,7 @@ export async function cogniStackPrepare(
       ok: false,
       messages: opts.dialogue,
       shouldSummarize: false,
-      error: `CogniStack 调用失败: ${msg}`,
+      error: t("ailib.gatewayCallFailed", { error: msg }),
     };
   }
 }

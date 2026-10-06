@@ -1,6 +1,7 @@
 //! Single-instance routing: reuse the main window (default) or spawn `doc-*` windows.
 
 use crate::access::{register_file, register_vault};
+use crate::vault_ops::MEDIA_EXTS;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,10 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 static DOC_SEQ: AtomicU64 = AtomicU64::new(1);
 
 fn store_path(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("markelle.json"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("markelle.json"))
 }
 
 /// Settings key `openFilesInNewWindow` — default false (reuse existing window).
@@ -64,10 +68,31 @@ pub fn focus_window(app: &AppHandle, label: &str) {
     }
 }
 
+/// Extensions an OS file-association / CLI launch may auto-register. Anything
+/// else is rejected: such paths reach the ACL with no user confirmation dialog,
+/// so only the types the app actually handles are accepted.
+fn is_openable_file(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    let ext = ext.to_ascii_lowercase();
+    matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkd")
+        || MEDIA_EXTS.contains(&ext.as_str())
+}
+
 pub fn deliver_path(app: &AppHandle, path: &Path, window_label: Option<&str>) {
     let arg = path.to_string_lossy().to_string();
     if path.is_file() {
-        let _ = register_file(app, path);
+        if !is_openable_file(path) {
+            return;
+        }
+        // Registering adds the path to the ACL. If it fails, emitting the open
+        // request would hand the frontend a path every read/write will reject;
+        // skip the emit instead of producing an unexplained failure.
+        if let Err(err) = register_file(app, path) {
+            eprintln!("register file failed, skipping open request: {err}");
+            return;
+        }
         if let Some(label) = window_label {
             let _ = app.emit_to(label, "open-file-request", arg);
         } else {
@@ -76,7 +101,10 @@ pub fn deliver_path(app: &AppHandle, path: &Path, window_label: Option<&str>) {
         return;
     }
     if path.is_dir() {
-        let _ = register_vault(app, path);
+        if let Err(err) = register_vault(app, path) {
+            eprintln!("register vault failed, skipping open request: {err}");
+            return;
+        }
         if let Some(label) = window_label {
             let _ = app.emit_to(label, "open-vault-request", arg);
         } else {

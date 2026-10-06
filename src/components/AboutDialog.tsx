@@ -50,7 +50,7 @@ export function AboutDialog({ open, onClose }: Props) {
       <button type="button" className="modal-backdrop" onClick={onClose} aria-label={t("common.close")} />
       <div className="modal-panel about-panel" ref={panelRef}>
         <div className="about-brand">
-          <img className="about-logo" src="/markelle.svg" alt="" width={52} height={52} />
+          <img className="about-logo" src="/markelle.svg" alt="Markelle" width={52} height={52} />
           <div>
             <h2 id="about-title" className="about-name">
               Markelle
@@ -60,7 +60,7 @@ export function AboutDialog({ open, onClose }: Props) {
         </div>
 
         <p className="about-blurb">{t("about.blurb").split("\n").map((line, i) => (
-              <span key={i}>
+              <span key={`${i}-${line}`}>
                 {i > 0 ? <br /> : null}
                 {line}
               </span>

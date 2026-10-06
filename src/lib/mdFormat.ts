@@ -1,48 +1,12 @@
 import { EditorSelection, type Extension } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { openSearchPanel } from "@codemirror/search";
+import { t } from "./i18n";
 
 export interface TextEdit {
   doc: string;
   from: number;
   to: number;
-}
-
-/** Pure helper: wrap `[from,to)` in `doc` with markers. */
-export function wrapRange(
-  doc: string,
-  from: number,
-  to: number,
-  before: string,
-  after: string = before,
-): TextEdit {
-  if (from === to) {
-    const insert = before + after;
-    return {
-      doc: doc.slice(0, from) + insert + doc.slice(to),
-      from: from + before.length,
-      to: from + before.length,
-    };
-  }
-  const selected = doc.slice(from, to);
-  const insert = before + selected + after;
-  return {
-    doc: doc.slice(0, from) + insert + doc.slice(to),
-    from: from + before.length,
-    to: from + before.length + selected.length,
-  };
-}
-
-export function linkRange(doc: string, from: number, to: number): TextEdit {
-  const selected = doc.slice(from, to);
-  const label = selected || "链接文字";
-  const insert = `[${label}](url)`;
-  const urlFrom = from + 1 + label.length + 2;
-  return {
-    doc: doc.slice(0, from) + insert + doc.slice(to),
-    from: urlFrom,
-    to: urlFrom + 3,
-  };
 }
 
 /** Wrap each selection range with `before`/`after`; if empty, insert markers and place cursor between. */
@@ -79,7 +43,7 @@ export function insertMarkdownLink(view: EditorView): boolean {
   const { state } = view;
   const changes = state.changeByRange((range) => {
     const selected = state.sliceDoc(range.from, range.to);
-    const label = selected || "链接文字";
+    const label = selected || t("md.linkLabelDefault");
     const insert = `[${label}](url)`;
     const urlFrom = range.from + 1 + label.length + 2;
     const urlTo = urlFrom + 3;
@@ -94,10 +58,7 @@ export function insertMarkdownLink(view: EditorView): boolean {
 
 /** Insert a minimal GFM table scaffold. */
 export function insertMarkdownTable(view: EditorView): boolean {
-  const snippet = `| 列1 | 列2 | 列3 |
-| --- | --- | --- |
-|  |  |  |
-`;
+  const snippet = t("md.tableScaffold");
   const { state } = view;
   const pos = state.selection.main.from;
   view.dispatch({
@@ -106,11 +67,6 @@ export function insertMarkdownTable(view: EditorView): boolean {
   });
   return true;
 }
-
-export const TABLE_SNIPPET = `| 列1 | 列2 | 列3 |
-| --- | --- | --- |
-|  |  |  |
-`;
 
 /** Insert a fenced block; cursor lands inside. */
 export function insertFence(

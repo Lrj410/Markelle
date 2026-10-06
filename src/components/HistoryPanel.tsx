@@ -25,6 +25,9 @@ interface DiffModalState {
   diff: DiffLine[];
 }
 
+/** Windowed diff rendering — cap the initial DOM and reveal more on demand. */
+const DIFF_RENDER_STEP = 400;
+
 export function HistoryPanel({
   vaultRoot,
   notePath,
@@ -36,6 +39,7 @@ export function HistoryPanel({
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [diffModal, setDiffModal] = useState<DiffModalState | null>(null);
+  const [diffLimit, setDiffLimit] = useState(DIFF_RENDER_STEP);
   const modalRef = useRef<HTMLDivElement>(null);
 
   useModalFocusTrap({
@@ -43,6 +47,12 @@ export function HistoryPanel({
     containerRef: modalRef,
     onEscape: () => setDiffModal(null),
   });
+
+  // Pathological diffs can be tens of thousands of lines; render a prefix and
+  // let the user page in more instead of building every node up front.
+  useEffect(() => {
+    setDiffLimit(DIFF_RENDER_STEP);
+  }, [diffModal?.id]);
 
   const refresh = useCallback(async () => {
     if (!vaultRoot || !notePath) {
@@ -187,7 +197,7 @@ export function HistoryPanel({
                 padding: "0.5rem 0",
               }}
             >
-              {diffModal.diff.map((line, idx) => {
+              {diffModal.diff.slice(0, diffLimit).map((line, idx) => {
                 const bg =
                   line.type === "add"
                     ? "var(--success-subtle)"
@@ -204,7 +214,7 @@ export function HistoryPanel({
                     : "inherit";
                 return (
                   <div
-                    key={idx}
+                    key={`${line.type}-${line.oldNum ?? ""}-${line.newNum ?? ""}-${idx}`}
                     style={{
                       display: "flex",
                       background: bg,
@@ -238,6 +248,16 @@ export function HistoryPanel({
                   </div>
                 );
               })}
+              {diffModal.diff.length > diffLimit && (
+                <button
+                  type="button"
+                  className="btn ghost"
+                  style={{ margin: "8px 12px" }}
+                  onClick={() => setDiffLimit((n) => n + DIFF_RENDER_STEP)}
+                >
+                  {t("history.showMoreDiff", { n: diffModal.diff.length - diffLimit })}
+                </button>
+              )}
             </div>
 
             <div

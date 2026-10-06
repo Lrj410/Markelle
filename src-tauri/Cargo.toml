@@ -1,6 +1,6 @@
 [package]
 name = "markelle"
-version = "0.1.1"
+version = "0.1.2"
 description = "Markelle — local-first high-performance Markdown knowledge workspace"
 authors = ["Lrj410"]
 edition = "2021"
@@ -36,5 +36,7 @@ memmap2 = "0.9"
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+# "unwind" (not "abort"): the codebase already recovers from spawn_blocking
+# JoinError, and a background panic must not kill the process and lose unsaved work.
+panic = "unwind"
 strip = true

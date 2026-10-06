@@ -152,7 +152,9 @@ export function PropertiesStrip({ docKey, source, onSourceChange }: Props) {
               type="text"
               className="props-chip-input"
               value={draftTags}
-              placeholder={emptyEditable ? "title, tags…" : "tag1, tag2"}
+              placeholder={
+                emptyEditable ? t("props.tagsPlaceholderEmpty") : t("props.tagsPlaceholder")
+              }
               spellCheck={false}
               onChange={(e) => setDraftTags(e.target.value)}
               onBlur={(e) => commitTags(e.target.value, docKey)}

@@ -3,7 +3,6 @@ import {
   buildDegreeMap,
   filterGraphNodes,
   folderTint,
-  getNodeNeighbors,
   labelOf,
   nodeRadius,
 } from "./graphModel";
@@ -48,18 +47,6 @@ describe("graphModel", () => {
   it("folderTint is stable", () => {
     expect(folderTint("笔记", true)).toBe(folderTint("笔记", true));
     expect(nodeRadius("note", true, 0)).toBeGreaterThan(nodeRadius("note", false, 0));
-  });
-
-  it("finds node neighbors accurately", () => {
-    const links = [
-      { source: "a", target: "b" },
-      { source: "c", target: "a" },
-      { source: "x", target: "y" },
-    ];
-    const neighbors = getNodeNeighbors("a", links).sort();
-    expect(neighbors).toEqual(["b", "c"]);
-    expect(getNodeNeighbors("y", links)).toEqual(["x"]);
-    expect(getNodeNeighbors("z", links)).toEqual([]);
   });
 });
 

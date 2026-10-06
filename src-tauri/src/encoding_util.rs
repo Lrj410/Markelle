@@ -59,8 +59,7 @@ pub fn decode_bytes(bytes: &[u8]) -> (String, String) {
 
     // chardetng sometimes picks windows-1252 for GBK Chinese text. Only override
     // when the bytes actually look like GBK, otherwise western text is mangled.
-    if (enc == encoding_rs::WINDOWS_1252 || enc == encoding_rs::ISO_8859_2)
-        && looks_like_gbk(bytes)
+    if (enc == encoding_rs::WINDOWS_1252 || enc == encoding_rs::ISO_8859_2) && looks_like_gbk(bytes)
     {
         enc = GBK;
     }
@@ -82,21 +81,23 @@ fn encoding_from_hint(hint: &str) -> Option<&'static Encoding> {
     }
 }
 
-pub(crate) fn decode_with_hint(bytes: &[u8], hint: Option<&str>, strip_bom: bool) -> (String, String) {
+pub(crate) fn decode_with_hint(
+    bytes: &[u8],
+    hint: Option<&str>,
+    strip_bom: bool,
+) -> (String, String) {
     if bytes.is_empty() {
-        return (
-            String::new(),
-            hint.unwrap_or("utf-8").to_ascii_lowercase(),
-        );
+        return (String::new(), hint.unwrap_or("utf-8").to_ascii_lowercase());
     }
     if let Some(name) = hint {
         if let Some(enc) = encoding_from_hint(name) {
-            let slice = if strip_bom && enc == encoding_rs::UTF_8 && bytes.starts_with(&[0xEF, 0xBB, 0xBF])
-            {
-                &bytes[3..]
-            } else {
-                bytes
-            };
+            let slice =
+                if strip_bom && enc == encoding_rs::UTF_8 && bytes.starts_with(&[0xEF, 0xBB, 0xBF])
+                {
+                    &bytes[3..]
+                } else {
+                    bytes
+                };
             let (cow, _, _) = enc.decode(slice);
             return (cow.into_owned(), enc.name().to_ascii_lowercase());
         }
@@ -457,8 +458,7 @@ mod tests {
             let mut f = File::create(&path).unwrap();
             f.write_all(body.as_bytes()).unwrap();
         }
-        let (text, enc, raw, indexed, eof) =
-            read_large_open(&path, index_max, paint_max).unwrap();
+        let (text, enc, raw, indexed, eof) = read_large_open(&path, index_max, paint_max).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(indexed, index_max as u64);
         assert!(raw.len() == index_max);
@@ -479,7 +479,9 @@ mod tests {
         // ASCII frontmatter + UTF-8 Chinese body — paint may truncate mid-file.
         let mut body = String::from("---\nstatus: ok\n---\n\n");
         for i in 0..8_000 {
-            body.push_str(&format!("# 超大文件压测行-{i}\n正文内容一二三四五六七八九十\n"));
+            body.push_str(&format!(
+                "# 超大文件压测行-{i}\n正文内容一二三四五六七八九十\n"
+            ));
         }
         {
             let mut f = File::create(&path).unwrap();

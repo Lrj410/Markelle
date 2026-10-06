@@ -118,13 +118,3 @@ export function hash01(id: string): number {
   return (h >>> 0) / 4294967296;
 }
 
-/** Returns neighbor IDs connected directly to the given node. */
-export function getNodeNeighbors(nodeId: string, links: GraphLink[]): string[] {
-  const neighbors = new Set<string>();
-  for (const l of links) {
-    if (l.source === nodeId) neighbors.add(l.target);
-    if (l.target === nodeId) neighbors.add(l.source);
-  }
-  return Array.from(neighbors);
-}
-

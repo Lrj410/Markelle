@@ -19,9 +19,17 @@ export function useSplitScrollSync(
     const rightHost = rightRoot.current;
     if (!leftHost || !rightHost) return;
 
-    let left = findScrollable(leftHost);
-    let right = findScrollable(rightHost);
-    if (!left || !right) return;
+    const leftInitial = findScrollable(leftHost);
+    const rightInitial = findScrollable(rightHost);
+    if (!leftInitial || !rightInitial) return;
+    let left: HTMLElement = leftInitial;
+    let right: HTMLElement = rightInitial;
+
+    // Track every element we attach a listener to. The 200ms re-bind can swap
+    // the scrollable node, so the cleanup must unbind each element explicitly
+    // rather than trusting a single (reassigned) variable.
+    const leftBound = new Set<HTMLElement>();
+    const rightBound = new Set<HTMLElement>();
 
     const syncFrom = (
       side: "left" | "right",
@@ -42,37 +50,55 @@ export function useSplitScrollSync(
     };
 
     const onLeft = () => {
-      right = findScrollable(rightHost) ?? right;
-      if (right) syncFrom("left", left!, right);
+      const r = findScrollable(rightHost);
+      if (r) right = r;
+      syncFrom("left", left, right);
     };
     const onRight = () => {
-      left = findScrollable(leftHost) ?? left;
-      if (left) syncFrom("right", right!, left);
+      const l = findScrollable(leftHost);
+      if (l) left = l;
+      syncFrom("right", right, left);
     };
 
-    left.addEventListener("scroll", onLeft, { passive: true });
-    right.addEventListener("scroll", onRight, { passive: true });
+    const bindLeft = (el: HTMLElement) => {
+      if (leftBound.has(el)) return;
+      leftBound.add(el);
+      el.addEventListener("scroll", onLeft, { passive: true });
+    };
+    const bindRight = (el: HTMLElement) => {
+      if (rightBound.has(el)) return;
+      rightBound.add(el);
+      el.addEventListener("scroll", onRight, { passive: true });
+    };
+
+    bindLeft(left);
+    bindRight(right);
 
     // Re-bind when layout settles (CM mount, markdown paint).
     const timer = window.setTimeout(() => {
       const l2 = findScrollable(leftHost);
       const r2 = findScrollable(rightHost);
-      if (l2 && left && l2 !== left) {
+      if (l2 && l2 !== left) {
         left.removeEventListener("scroll", onLeft);
+        leftBound.delete(left);
         left = l2;
-        left.addEventListener("scroll", onLeft, { passive: true });
+        bindLeft(left);
       }
-      if (r2 && right && r2 !== right) {
+      if (r2 && r2 !== right) {
         right.removeEventListener("scroll", onRight);
+        rightBound.delete(right);
         right = r2;
-        right.addEventListener("scroll", onRight, { passive: true });
+        bindRight(right);
       }
     }, 200);
 
     return () => {
       window.clearTimeout(timer);
-      left?.removeEventListener("scroll", onLeft);
-      right?.removeEventListener("scroll", onRight);
+      // Unbind every element we ever attached to, even if the node was swapped.
+      for (const el of leftBound) el.removeEventListener("scroll", onLeft);
+      for (const el of rightBound) el.removeEventListener("scroll", onRight);
+      leftBound.clear();
+      rightBound.clear();
     };
   }, [leftRoot, rightRoot, enabled]);
 }

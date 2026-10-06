@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -32,6 +32,15 @@ export function useModalFocusTrap({
   initialFocusSelector,
   restoreFocus = true,
 }: ModalFocusTrapOptions): void {
+  // Callers pass inline arrows (e.g. `onClose={() => setOpen(false)}`), so
+  // `onEscape` is a fresh identity on every parent render. Keeping it in a ref
+  // lets the trap effect depend only on real triggers (`active` / `containerRef`),
+  // otherwise each keystroke inside the modal would re-run cleanup → refocus.
+  const onEscapeRef = useRef(onEscape);
+  useEffect(() => {
+    onEscapeRef.current = onEscape;
+  }, [onEscape]);
+
   useEffect(() => {
     if (!active) return;
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -48,7 +57,7 @@ export function useModalFocusTrap({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onEscape?.();
+        onEscapeRef.current?.();
         return;
       }
       if (e.key !== "Tab" || !panel) return;
@@ -70,5 +79,5 @@ export function useModalFocusTrap({
       window.removeEventListener("keydown", onKey);
       if (restoreFocus) previouslyFocused?.focus?.();
     };
-  }, [active, containerRef, onEscape, initialFocusSelector, restoreFocus]);
+  }, [active, containerRef, initialFocusSelector, restoreFocus]);
 }

@@ -24,9 +24,10 @@
   /* --- Text & Inks --- */
   --text-primary: #201b15;
   --text-secondary: #6b5f50;
-  /* ≥4.5:1 on both --bg-surface and --bg-surface-elevated (WCAG AA body text) */
-  --text-tertiary: #766955;
-  --text-disabled: #c6b9a5;
+  /* ≥4.5:1 on --bg-app (#ede8dd), --bg-subtle, --bg-surface and
+     --bg-surface-elevated (WCAG AA body text). Darkened from #766955, which
+     fell to 4.38:1 on --bg-app at 11–11.5px. */
+  --text-tertiary: #6f6252;
   --text-inverse: #fbf8f1;
 
   /* --- Brand / Accent（朱砂，唯一强调色；正文链接对比度需 ≥4.5:1） --- */
@@ -39,10 +40,13 @@
   --accent-fg: #fbf8f1;
 
   /* --- Semantic Status（去饱和，与暖墨基层同族） --- */
-  --success: #4f7a4a;
-  --success-subtle: rgba(79, 122, 74, 0.12);
-  --warning: #96681d;
-  --warning-subtle: rgba(150, 104, 29, 0.14);
+  /* Darkened so status text clears 4.5:1 on the darker warm surfaces it lands
+     on (--bg-subtle code blocks, 10–14% status-tinted pills). Old #4f7a4a
+     measured 4.19:1 on --bg-subtle, #96681d 4.11:1. */
+  --success: #477040;
+  --success-subtle: rgba(71, 112, 64, 0.12);
+  --warning: #855c17;
+  --warning-subtle: rgba(133, 92, 23, 0.14);
   --danger: #9a2b22;
   --danger-hover: #7f221b;
   --danger-subtle: rgba(154, 43, 34, 0.12);
@@ -64,36 +68,64 @@
   --radius-2xl: 12px;
   --radius-full: 999px;
 
+  /* --- Type scale（与既有主导字号对齐；10.5/11.5/12.5/13.5 收敛到对应步进） --- */
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+  /* App root / default UI text size (html/body/#root) — kept at its historical
+     value so body text never shrinks when the scale collapses 13.5 → 13. */
+  --text-root: 13.5px;
+
   /* --- Typography Stacks --- */
   --font-ui: "DM Sans Variable", "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
     "PingFang SC", "Microsoft YaHei UI", sans-serif;
   /* 正文默认衬线：纸质书观感（中文回落到宋体族） */
   --font-doc: "Source Serif 4 Variable", "Source Serif 4", Georgia, "Songti SC", "Noto Serif SC",
     "SimSun", serif;
-  --font-book: "Source Serif 4 Variable", "Source Serif 4", Georgia, "Songti SC", "Noto Serif SC",
-    "SimSun", serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, "PingFang SC", monospace;
-  --font-gutter: "MarkelleGutter", "Cascadia Mono", Consolas, monospace;
 
   /* --- Layout Dimensions --- */
   --header-h: 42px;
   --activity-w: 48px;
   --activity-w-expanded: 136px;
-  --dock-sidebar-w: 260px;
   --reader-measure: 70ch;
   --reader-font-size: 17px;
   --status-h: 28px;
+  /* Structural widths shared with JS constants (MIN_RIGHT_SIZE / menuW…). */
+  --dock-right-min: 270px;
+  --ctx-menu-w: 188px;
+  --settings-nav-w: 184px;
+  --graph-inspector-w: 280px;
 
   /* --- Motion / Easing（快、收得住，不用弹跳） --- */
   --transition-fast: 110ms cubic-bezier(0.2, 0, 0, 1);
   --transition-normal: 170ms cubic-bezier(0.2, 0, 0, 1);
-  --transition-spring: 240ms cubic-bezier(0.2, 0, 0, 1);
+
+  /* --- Stacking Order（单一有序层级；数值越大越靠前，勿再用裸数字） --- */
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-dock-ghost: 20;
+  --z-header: 30;
+  --z-dropdown: 40;
+  --z-overlay: 50;
+  --z-context: 60;
+  --z-modal: 70;
+  --z-confirm: 80;
+  --z-lightbox: 100;
 
   /* --- Backward-Compatibility Aliases --- */
   --ink: var(--text-primary);
   --ink-soft: var(--text-secondary);
   --paper: var(--bg-app);
   --paper-elevated: var(--bg-surface-elevated);
+  /* Sidebar/dock paper surface — the intermediate level between --paper (outer
+     shell) and --paper-elevated. Referenced by .ai-panel / .ai-quick-actions. */
+  --paper-sidebar: var(--bg-surface);
   --page: var(--bg-surface-elevated);
   --line: var(--border-subtle);
   --accent-soft: var(--accent-subtle);
@@ -103,14 +135,14 @@
   --btn-primary-fg: var(--accent-fg);
   --btn-primary-hover: var(--accent-hover);
   --control-strong: var(--text-secondary);
-  --modal-scrim: var(--bg-modal-overlay);
   --shadow: var(--shadow-sm);
-  --shadow-soft: var(--shadow-sm);
   --shadow-float: var(--shadow-lg);
   --fg-muted: var(--text-tertiary);
   /* Focus ring must be opaque: a translucent tint only reaches ~1.6:1 against
      the page, below the 3:1 that WCAG 1.4.11 / 2.4.11 require for UI states. */
   --focus-ring: var(--border-focus);
+  /* Legacy alias — still referenced by immersive overlays in shell.css. */
+  --z-title: var(--z-header);
 }
 
 html[data-theme="dark"] {
@@ -136,7 +168,6 @@ html[data-theme="dark"] {
   --text-secondary: #b5a793;
   /* ≥4.5:1 on both --bg-surface and --bg-surface-elevated (WCAG AA body text) */
   --text-tertiary: #9c8c76;
-  --text-disabled: #574d3f;
   --text-inverse: #1e1a14;
 
   /* --- Brand / Accent（陶土朱砂，暗底提亮） --- */
@@ -170,6 +201,8 @@ html[data-theme="dark"] {
   --ink-soft: var(--text-secondary);
   --paper: var(--bg-app);
   --paper-elevated: var(--bg-surface-elevated);
+  /* Sidebar/dock paper surface (see :root above). */
+  --paper-sidebar: var(--bg-surface);
   --page: var(--bg-surface-elevated);
   --line: var(--border-subtle);
   --accent-soft: var(--accent-subtle);
@@ -179,9 +212,7 @@ html[data-theme="dark"] {
   --btn-primary-fg: var(--accent-fg);
   --btn-primary-hover: var(--accent-hover);
   --control-strong: var(--text-secondary);
-  --modal-scrim: var(--bg-modal-overlay);
   --shadow: var(--shadow-sm);
-  --shadow-soft: var(--shadow-sm);
   --shadow-float: var(--shadow-lg);
   --fg-muted: var(--text-tertiary);
   --focus-ring: var(--border-focus);

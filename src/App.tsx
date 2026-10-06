@@ -4,6 +4,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -59,6 +60,7 @@ import { PromptDialog } from "./components/PromptDialog";
 import { CommandPalette, type CommandItem } from "./components/CommandPalette";
 import { setLocale, t } from "./lib/i18n";
 import {
+  appendMarkdownFile,
   formatBytes,
   LARGE_FILE_WARN_BYTES,
   MAX_LARGE_FILE_TABS,
@@ -73,7 +75,6 @@ import {
   hydrateLargeFile,
   largeFileClose,
   listenLargeFileProgress,
-  type LargeFileProgress,
 } from "./lib/largeFile";
 import { formatAppError } from "./lib/errors";
 import {
@@ -103,6 +104,7 @@ const MarkdownView = lazy(() =>
 import type { TocItem } from "./lib/toc";
 import { resolveHeadingId } from "./lib/toc";
 import type { ColorScheme, LayoutPreset } from "./lib/types";
+import type { GraphHops } from "./lib/graph";
 import { isDirty, isLargeTab, type DocTab } from "./lib/tabs";
 import { getWriteBlockReason } from "./lib/documentGuards";
 import {
@@ -129,7 +131,7 @@ import { IMMERSIVE_TOGGLE_EVENT } from "./lib/plugins/builtin";
 import type { PluginInfo } from "./lib/plugins/types";
 import type { GraphScope, ReaderSettings, RecentEntry, ViewMode } from "./lib/types";
 import { DEFAULT_SETTINGS } from "./lib/types";
-import { isPanelVisible, togglePanel, type DockLayout, type PanelId } from "./lib/dock";
+import { isPanelVisible, panelLabel, togglePanel, type DockLayout, type PanelId } from "./lib/dock";
 import { allocateUniquePath, basename, dirname, joinPath, toPosixPath } from "./lib/paths";
 import { refactorAllLinks } from "./lib/refactorLinks";
 import {
@@ -195,19 +197,27 @@ function App() {
   const ollamaAbortRef = useRef<AbortController | null>(null);
 
   const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
   const activeIdRef = useRef(activeId);
-  activeIdRef.current = activeId;
   const tocRef = useRef(toc);
-  tocRef.current = toc;
   const vaultRef = useRef(vault);
-  vaultRef.current = vault;
   const settingsRef = useRef(settings);
-  settingsRef.current = settings;
   const readyRef = useRef(ready);
-  readyRef.current = ready;
   const recentRef = useRef(recent);
-  recentRef.current = recent;
+  // Mirror the latest state into refs for the stable callbacks (openPath,
+  // keydown, hydrate, …) that must read a same-commit value. Written in a
+  // layout effect rather than during render so an interrupted/concurrent render
+  // can never publish a stale or discarded snapshot; layout effects flush
+  // synchronously before paint and before any event handler can run, so
+  // same-tick readers still see the committed value.
+  useLayoutEffect(() => {
+    tabsRef.current = tabs;
+    activeIdRef.current = activeId;
+    tocRef.current = toc;
+    vaultRef.current = vault;
+    settingsRef.current = settings;
+    readyRef.current = ready;
+    recentRef.current = recent;
+  });
   const openGenRef = useRef(0);
   /** Live source editor for drag-drop insert-at-cursor. */
   const editorViewRef = useRef<import("@codemirror/view").EditorView | null>(null);
@@ -215,7 +225,6 @@ function App() {
   const hydrateGenRef = useRef<Map<string, number>>(new Map());
   /** Per-tab progress unlisten, so a closed tab cannot leak its listener. */
   const hydrateUnlistenRef = useRef<Map<string, () => void>>(new Map());
-  const [, setLargeProgress] = useState<LargeFileProgress | null>(null);
   const pendingHeadingRef = useRef<string | null>(null);
   const pendingLineRef = useRef<number | null>(null);
   const tocOwnerRef = useRef<string | null>(null);
@@ -387,8 +396,9 @@ function App() {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
     try {
       localStorage.setItem("markelle-scheme", settings.scheme);
-    } catch {
-      /* ignore quota / private mode */
+    } catch (err) {
+      /* quota / private mode — non-fatal, but log so a real storage failure is visible */
+      console.warn("markelle: failed to persist scheme preference", err);
     }
   }, [dark, settings.scheme]);
 
@@ -410,7 +420,11 @@ function App() {
   useEffect(() => {
     if (!ready || !hydrated) return;
     const timer = window.setTimeout(() => {
-      void saveSettings(settings);
+      // Surface a persistence failure (disk full / store timeout) instead of
+      // swallowing it — saveSettings now rejects when store.save() stalls.
+      void saveSettings(settings).catch((err) => {
+        setStatus(formatAppError(err, t("app.saveSettingsFailed")));
+      });
     }, 400);
     return () => window.clearTimeout(timer);
   }, [settings, ready, hydrated]);
@@ -453,8 +467,9 @@ function App() {
             }
           }
         }
-      } catch {
-        /* web preview / permission */
+      } catch (err) {
+        /* web preview / permission — fullscreen control is best-effort */
+        console.warn("markelle: immersive window control failed", err);
       }
     })();
     return () => {
@@ -488,8 +503,9 @@ function App() {
     try {
       await saveSettings(settingsRef.current);
       await flushStore();
-    } catch {
-      /* best-effort */
+    } catch (err) {
+      /* best-effort: the in-memory settings are still authoritative this session */
+      console.warn("markelle: failed to flush settings to disk", err);
     }
   }, []);
 
@@ -497,8 +513,11 @@ function App() {
     try {
       const disk = await listDiskPlugins(vaultRoot);
       setPlugins(mergePlugins(disk));
-    } catch {
+    } catch (err) {
+      // Surface the failure instead of silently pretending only built-ins exist.
+      console.warn("markelle: failed to load disk plugins", err);
       setPlugins(mergePlugins([]));
+      setStatus(t("app.pluginsLoadFailed"));
     }
   }, []);
 
@@ -538,7 +557,7 @@ function App() {
       setStatus,
       settings.pluginSettings,
       (pluginSettings) => setSettings((s) => ({ ...s, pluginSettings })),
-    );
+    ).catch((err) => setStatus(formatAppError(err)));
   }, [ready, plugins, settings.enabledPlugins, settings.pluginSettings]);
 
   useEffect(() => {
@@ -558,9 +577,56 @@ function App() {
     const onOpenAi = () => {
       onTogglePanel("ai");
     };
-    const onAiAction = () => {
+    // Editor / reader context menus dispatch "markelle:ai-action" with the
+    // requested action in the event detail. Open the panel, then run the same
+    // AI pipeline the command palette uses.
+    const onAiAction = (event: Event) => {
       if (!isPanelVisible(settings.dock, "ai")) {
         onTogglePanel("ai");
+      }
+      const action = (event as CustomEvent<{ action?: string }>).detail?.action;
+      switch (action) {
+        case "summarize":
+          void runEditorAiAction({
+            buildPrompt: summarizePrompt,
+            apply: "append-heading",
+            headingKey: "app.aiSummaryHeading",
+            selectionInsertMode: "replace-with-newline",
+          });
+          break;
+        case "polish":
+          void runEditorAiAction({
+            buildPrompt: polishPrompt,
+            apply: "replace-or-append",
+            headingKey: "app.aiPolishHeading",
+            selectionDone: t("app.aiSelectionPolished"),
+          });
+          break;
+        case "continue":
+          void runEditorAiAction({
+            buildPrompt: continuePrompt,
+            apply: "continue",
+            selectionDone: t("app.aiSelectionContinued"),
+          });
+          break;
+        case "proofread":
+          void runEditorAiAction({
+            buildPrompt: proofreadPrompt,
+            apply: "replace-or-append",
+            headingKey: "app.aiProofreadHeading",
+            selectionDone: t("app.aiSelectionProofread"),
+          });
+          break;
+        case "translate":
+          void runEditorAiAction({
+            buildPrompt: translatePrompt,
+            apply: "replace-or-append",
+            headingKey: "app.aiTranslateHeading",
+            selectionDone: t("app.aiSelectionTranslated"),
+          });
+          break;
+        default:
+          break;
       }
     };
     window.addEventListener("markelle:open-ai", onOpenAi);
@@ -569,7 +635,7 @@ function App() {
       window.removeEventListener("markelle:open-ai", onOpenAi);
       window.removeEventListener("markelle:ai-action", onAiAction);
     };
-  }, [onTogglePanel, settings.dock]);
+  }, [onTogglePanel, settings.dock, runEditorAiAction]);
 
   const onToggleRightDock = useCallback((preferredPanel?: PanelId) => {
     setSettings((s) => {
@@ -585,7 +651,10 @@ function App() {
   }, []);
 
   const vaultRootRef = useRef<string | null | undefined>(null);
-  vaultRootRef.current = vault?.root ?? null;
+  // Same latest-value mirror as the block above; read by closeVault (post-commit).
+  useLayoutEffect(() => {
+    vaultRootRef.current = vault?.root ?? null;
+  });
 
   const { loadVault, pickVault, closeVault } = useVaultActions({
     beginBusy,
@@ -721,16 +790,6 @@ function App() {
       tabsRef.current = next;
       return next;
     });
-    if (activeIdRef.current === tabId) {
-      setLargeProgress({
-        path: opened.path,
-        bytesRead: opened.bytesRead ?? 0,
-        size: opened.size,
-        done: false,
-        ready: true,
-        lineCount: 0,
-      });
-    }
 
     let unlisten: (() => void) | undefined;
     let lastUiMs = 0;
@@ -757,7 +816,6 @@ function App() {
       lastLineCount = p.lineCount || 0;
       // Non-urgent: keep scroll/input responsive during hydrate (Vercel rerender-transitions).
       startTransition(() => {
-        if (activeIdRef.current === tabId) setLargeProgress(p);
         setTabs((prev) => {
           const next = prev.map((t) =>
             t.id === tabId
@@ -1088,7 +1146,17 @@ function App() {
   useEffect(() => {
     setPendingOpenConsumer((item) => {
       if (item.kind === "file") {
-        void openPath(item.path, false, undefined, { authorize: true });
+        // Only the main window may spawn new windows. A freshly created `doc-*`
+        // window still receives the same open-file request from the single-instance
+        // forwarder, so without this guard it would open yet another window for the
+        // same file (see the matching guard on the startup-argument path below).
+        if (settingsRef.current.openFilesInNewWindow && getCurrentWindow().label === "main") {
+          void openPathInNewWindow(item.path).catch((err) =>
+            setStatus(formatAppError(err)),
+          );
+        } else {
+          void openPath(item.path, false, undefined, { authorize: true });
+        }
       } else {
         void loadVault(item.path, { trust: true });
       }
@@ -1102,7 +1170,14 @@ function App() {
 
     const startup = readStartupFileParam();
     if (startup) {
-      void openPath(startup, false, undefined, { authorize: true });
+      // Only the main window may spawn the new window; a `doc-*` window already
+      // carries the same `?file=` param and must open it locally (otherwise the
+      // open-files-in-new-window setting would recurse into endless windows).
+      if (settingsRef.current.openFilesInNewWindow && getCurrentWindow().label === "main") {
+        void openPathInNewWindow(startup).catch((err) => setStatus(formatAppError(err)));
+      } else {
+        void openPath(startup, false, undefined, { authorize: true });
+      }
       return;
     }
 
@@ -2028,6 +2103,16 @@ function App() {
   // Read mode has no input, so it passes through with no delay. Switching tabs
   // (active.id changes) resets immediately to avoid a stale preview flash.
   const previewSource = useDebouncedValue(active?.content ?? "", 200, active?.id);
+  // Stable identity: SourceEditor keys its CodeMirror extension set on this
+  // object, so a fresh `{...}` literal per render forced a full reconfigure
+  // (and reset the virtual-doc chunk cache). Depend on the primitives instead
+  // of `active`, whose identity changes on every content edit.
+  const sourceVirtualDoc = useMemo(() => {
+    const backendBuffer = active?.backendBuffer;
+    const path = active?.path;
+    if (!backendBuffer || !path) return undefined;
+    return { path, totalLines: active?.lineCount || 2000 };
+  }, [active?.backendBuffer, active?.path, active?.lineCount]);
   const effectiveGraphScope: GraphScope =
     graphScope === "local" && !active ? "full" : graphScope;
 
@@ -2450,23 +2535,27 @@ function App() {
         run: () => {
           if (!active || active.large) return;
           void (async () => {
-            const { html } = renderMarkdown(active.content, {
-              baseDir: dirname(active.path),
-              vaultRoot: vaultRef.current?.root ?? null,
-              vaultFiles,
-              toAssetUrl: toGatedAssetUrl,
-            });
-            const body = await embedLocalImagesInHtml(html);
-            const doc = buildExportHtml({
-              title: active.name,
-              bodyHtml: body,
-              dark,
-            });
-            downloadTextFile(
-              active.name.replace(/\.(md|markdown|mdown|mkd)$/i, "") + ".html",
-              doc,
-            );
-            setStatus(t("app.exportedHtml"));
+            try {
+              const { html } = renderMarkdown(active.content, {
+                baseDir: dirname(active.path),
+                vaultRoot: vaultRef.current?.root ?? null,
+                vaultFiles,
+                toAssetUrl: toGatedAssetUrl,
+              });
+              const body = await embedLocalImagesInHtml(html);
+              const doc = buildExportHtml({
+                title: active.name,
+                bodyHtml: body,
+                dark,
+              });
+              downloadTextFile(
+                active.name.replace(/\.(md|markdown|mdown|mkd)$/i, "") + ".html",
+                doc,
+              );
+              setStatus(t("app.exportedHtml"));
+            } catch (err) {
+              setStatus(formatAppError(err));
+            }
           })();
         },
       },
@@ -2478,16 +2567,20 @@ function App() {
         run: () => {
           if (!active || active.large) return;
           void (async () => {
-            const { html } = renderMarkdown(active.content, {
-              baseDir: dirname(active.path),
-              vaultRoot: vaultRef.current?.root ?? null,
-              vaultFiles,
-              toAssetUrl: toGatedAssetUrl,
-            });
-            const body = await embedLocalImagesInHtml(html);
-            printHtmlDocument(
-              buildExportHtml({ title: active.name, bodyHtml: body, dark: false }),
-            );
+            try {
+              const { html } = renderMarkdown(active.content, {
+                baseDir: dirname(active.path),
+                vaultRoot: vaultRef.current?.root ?? null,
+                vaultFiles,
+                toAssetUrl: toGatedAssetUrl,
+              });
+              const body = await embedLocalImagesInHtml(html);
+              printHtmlDocument(
+                buildExportHtml({ title: active.name, bodyHtml: body, dark: false }),
+              );
+            } catch (err) {
+              setStatus(formatAppError(err));
+            }
           })();
         },
       },
@@ -2650,8 +2743,6 @@ function App() {
     settings.immersive,
     settings.autosave,
     settings.ollamaEnabled,
-    settings.ollamaBaseUrl,
-    settings.ollamaModel,
     settings.locale,
     dark,
     toggleImmersive,
@@ -2788,11 +2879,18 @@ function App() {
           if (openTab && getWriteBlockReason(openTab)) {
             try {
               const file = await readMarkdownFile(filePath, true);
+              // Never write a truncated / preview read back to disk.
+              if (file.truncated || (file.large && file.truncated)) {
+                skippedLarge++;
+                continue;
+              }
               const updated = refactorAllLinks(file.content, oldPath, newPath);
               if (updated !== file.content) {
-                await writeMarkdownFile(filePath, updated);
+                const st = await writeMarkdownFile(filePath, updated);
+                // Disk now differs from the buffer/large tab's snapshot. Refresh
+                // its fingerprint so the next save is not blocked as stale.
+                patchTab(openTab.id, { diskMtimeMs: st.mtimeMs, size: st.size });
                 totalUpdated++;
-                skippedLarge++;
               }
             } catch {
               /* ignore individual file io error */
@@ -2820,6 +2918,11 @@ function App() {
           } else {
             try {
               const file = await readMarkdownFile(filePath, true);
+              // Never write a truncated / preview read back to disk.
+              if (file.truncated || (file.large && file.truncated)) {
+                skippedLarge++;
+                continue;
+              }
               const updated = refactorAllLinks(file.content, oldPath, newPath);
               if (updated !== file.content) {
                 await writeMarkdownFile(filePath, updated);
@@ -2860,6 +2963,155 @@ function App() {
   const handleToggleRightDock = useCallback(() => onToggleRightDock(), [onToggleRightDock]);
 
   /*
+    Stable identities for the AI dock panel.
+    ──────────────────────────────────────
+    AiAssistantPanel is memoised; before this, every App render handed it a
+    fresh set of inline arrow callbacks, so it re-rendered (and re-parsed all of
+    its markdown messages) on any unrelated App state change. These match the
+    previous inline behaviour exactly.
+  */
+  const aiGetSelectedText = useCallback(() => {
+    const view = editorViewRef.current;
+    if (view && !view.state.selection.main.empty) {
+      return view.state.sliceDoc(
+        view.state.selection.main.from,
+        view.state.selection.main.to,
+      );
+    }
+    return (typeof window !== "undefined" && window.getSelection()?.toString()) || "";
+  }, []);
+
+  const aiOnInsertText = useCallback(
+    (text: string) => {
+      const view = editorViewRef.current;
+      if (view) {
+        const { from, to } = view.state.selection.main;
+        view.dispatch({
+          changes: { from, to, insert: text },
+          selection: { anchor: from + text.length },
+          scrollIntoView: true,
+        });
+        view.focus();
+      } else if (active) {
+        patchActive({ content: active.content + "\n\n" + text });
+      }
+    },
+    [active, patchActive],
+  );
+
+  const aiOnAppendText = useCallback(
+    (text: string) => {
+      if (!active) {
+        setStatus(t("ai.noActiveNote"));
+        return;
+      }
+      const view = editorViewRef.current;
+      if (view) {
+        const end = view.state.doc.length;
+        const prefix =
+          end > 0 && view.state.doc.sliceString(end - 1, end) !== "\n" ? "\n\n" : "\n";
+        view.dispatch({
+          changes: { from: end, insert: `${prefix}${text}` },
+          selection: { anchor: end + prefix.length + text.length },
+          scrollIntoView: true,
+        });
+        view.focus();
+      } else {
+        patchActive({ content: `${active.content.trimEnd()}\n\n${text}` });
+      }
+      setStatus(t("ai.appended"));
+    },
+    [active, patchActive],
+  );
+
+  const aiOnReplaceContent = useCallback(
+    (text: string) => {
+      if (!active) {
+        setStatus(t("ai.noActiveNote"));
+        return;
+      }
+      const view = editorViewRef.current;
+      if (view) {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: text },
+          selection: { anchor: text.length },
+          scrollIntoView: true,
+        });
+        view.focus();
+      } else {
+        patchActive({ content: text });
+      }
+    },
+    [active, patchActive],
+  );
+
+  const aiOnReplaceSelection = useCallback(
+    (text: string) => {
+      const view = editorViewRef.current;
+      if (view && !view.state.selection.main.empty) {
+        const { from, to } = view.state.selection.main;
+        view.dispatch({
+          changes: { from, to, insert: text },
+          selection: { anchor: from + text.length },
+          scrollIntoView: true,
+        });
+        view.focus();
+      } else if (active) {
+        patchActive({ content: text });
+      }
+    },
+    [active, patchActive],
+  );
+
+  const aiOnOpenSettings = useCallback(() => setSettingsOpen(true), []);
+
+  const aiOnCreateNote = useCallback(
+    (title: string, content: string) => {
+      void (async () => {
+        try {
+          const targetFolder = vault?.root || (active?.path ? dirname(active.path) : "");
+          if (!targetFolder) {
+            setStatus(t("ai.cannotCreateNote"));
+            return;
+          }
+          const existing = new Set(
+            vault
+              ? flattenVaultFiles(vault.root, vault.tree).map((f) => normalizePath(f.path))
+              : [],
+          );
+          const unique = allocateUniquePath(targetFolder, `${title}.md`, existing);
+          await writeMarkdownFile(unique, content);
+          if (vault) await loadVault(vault.root);
+          await openPath(unique, false, undefined, { authorize: true });
+          setStatus(t("ai.created"));
+        } catch (e) {
+          setStatus(formatAppError(e));
+        }
+      })();
+    },
+    [vault, active, loadVault, openPath],
+  );
+
+  /*
+    Stable identities for GraphView (also memoised). Inline arrows here forced a
+    full graph re-render (and forced the force-simulation effect to be
+    reconsidered) on every App render.
+  */
+  const graphOnLocalHopsChange = useCallback((hops: GraphHops) => {
+    setSettings((s) => ({ ...s, graphLocalHops: hops }));
+  }, []);
+  const graphOnKeepOpenChange = useCallback((keep: boolean) => {
+    setSettings((s) => ({ ...s, graphKeepOpen: keep }));
+  }, []);
+  const graphOnOpenFile = useCallback(
+    (path: string) => {
+      if (!settingsRef.current.graphKeepOpen) setGraphOpen(false);
+      void openPath(path);
+    },
+    [openPath],
+  );
+
+  /*
     First commit must look EXACTLY like the inline splash in index.html.
     `createRoot()` calls `clearContainer()` on its first commit, so returning
     anything else here would throw away the boot screen that is already on
@@ -2868,22 +3120,12 @@ function App() {
     Keys/classes below are intentionally duplicated from index.html — the markup
     has to survive the hand-off byte-for-byte in layout terms.
   */
-  if (!ready) {
-    return (
-      <div className="boot-inline" aria-busy="true">
-        <div className="boot-mark" aria-hidden="true">
-          M
-        </div>
-        <div>Markelle</div>
-        <div className="boot-bar" aria-hidden="true">
-          <i />
-        </div>
-      </div>
-    );
-  }
-
-  const renderDockPanel = (id: PanelId) => {
-    switch (id) {
+  // The `!ready` boot-screen early return now lives just below, AFTER all hooks
+  // (see the note there) — rules of hooks forbids a conditional return before
+  // the dock-panel callbacks.
+  const renderDockPanelContent = useCallback(
+    (id: PanelId) => {
+      switch (id) {
       case "vault":
         if (!vault) {
           return (
@@ -3010,113 +3252,84 @@ function App() {
             settings={settings}
             activePath={active?.path ?? null}
             activeContent={active?.content ?? ""}
-            getSelectedText={() => {
-              const view = editorViewRef.current;
-              if (view && !view.state.selection.main.empty) {
-                return view.state.sliceDoc(
-                  view.state.selection.main.from,
-                  view.state.selection.main.to,
-                );
-              }
-              return (
-                (typeof window !== "undefined" && window.getSelection()?.toString()) ||
-                ""
-              );
-            }}
-            onInsertText={(text) => {
-              const view = editorViewRef.current;
-              if (view) {
-                const { from, to } = view.state.selection.main;
-                view.dispatch({
-                  changes: { from, to, insert: text },
-                  selection: { anchor: from + text.length },
-                  scrollIntoView: true,
-                });
-                view.focus();
-              } else if (active) {
-                patchActive({ content: active.content + "\n\n" + text });
-              }
-            }}
-            onAppendText={(text) => {
-              if (!active) {
-                setStatus("当前未打开任何笔记");
-                return;
-              }
-              const view = editorViewRef.current;
-              if (view) {
-                const end = view.state.doc.length;
-                const prefix = end > 0 && view.state.doc.sliceString(end - 1, end) !== "\n" ? "\n\n" : "\n";
-                view.dispatch({
-                  changes: { from: end, insert: `${prefix}${text}` },
-                  selection: { anchor: end + prefix.length + text.length },
-                  scrollIntoView: true,
-                });
-                view.focus();
-              } else {
-                patchActive({ content: `${active.content.trimEnd()}\n\n${text}` });
-              }
-              setStatus(t("ai.appended"));
-            }}
-            onReplaceContent={(text) => {
-              if (!active) {
-                setStatus("当前未打开任何笔记");
-                return;
-              }
-              const view = editorViewRef.current;
-              if (view) {
-                view.dispatch({
-                  changes: { from: 0, to: view.state.doc.length, insert: text },
-                  selection: { anchor: text.length },
-                  scrollIntoView: true,
-                });
-                view.focus();
-              } else {
-                patchActive({ content: text });
-              }
-            }}
-            onReplaceSelection={(text) => {
-              const view = editorViewRef.current;
-              if (view && !view.state.selection.main.empty) {
-                const { from, to } = view.state.selection.main;
-                view.dispatch({
-                  changes: { from, to, insert: text },
-                  selection: { anchor: from + text.length },
-                  scrollIntoView: true,
-                });
-                view.focus();
-              } else if (active) {
-                patchActive({ content: text });
-              }
-            }}
-            onCreateNote={(title, content) => {
-              void (async () => {
-                try {
-                  const targetFolder = vault?.root || (active?.path ? dirname(active.path) : "");
-                  if (!targetFolder) {
-                    setStatus("无法创建笔记：未打开知识库或文件");
-                    return;
-                  }
-                  const existing = new Set(
-                    vault ? flattenVaultFiles(vault.root, vault.tree).map((f) => normalizePath(f.path)) : [],
-                  );
-                  const unique = allocateUniquePath(targetFolder, `${title}.md`, existing);
-                  await writeMarkdownFile(unique, content);
-                  if (vault) await loadVault(vault.root);
-                  await openPath(unique, false, undefined, { authorize: true });
-                  setStatus(t("ai.created"));
-                } catch (e) {
-                  setStatus(formatAppError(e));
-                }
-              })();
-            }}
-            onOpenSettings={() => setSettingsOpen(true)}
+            getSelectedText={aiGetSelectedText}
+            onInsertText={aiOnInsertText}
+            onAppendText={aiOnAppendText}
+            onReplaceContent={aiOnReplaceContent}
+            onReplaceSelection={aiOnReplaceSelection}
+            onCreateNote={aiOnCreateNote}
+            onOpenSettings={aiOnOpenSettings}
             onStatus={setStatus}
           />
         );
       default:
         return null;
     }
-  };
+    },
+    [
+      vault,
+      active,
+      activeId,
+      busy,
+      openVaultFile,
+      closeVault,
+      refreshVault,
+      createNoteIn,
+      setStatus,
+      handleVaultRename,
+      toc,
+      onTogglePanel,
+      patchActive,
+      patchTab,
+      openPath,
+      loadVault,
+      pickVault,
+      settings,
+      dailyExistingDates,
+      aiGetSelectedText,
+      aiOnInsertText,
+      aiOnAppendText,
+      aiOnReplaceContent,
+      aiOnReplaceSelection,
+      aiOnCreateNote,
+      aiOnOpenSettings,
+    ],
+  );
+
+  // Per-panel boundary: a crash in one dock panel must not replace the whole UI.
+  // `key={id}` remounts the boundary when the active panel changes, clearing any
+  // sticky error state from the previous panel.
+  const renderDockPanel = useCallback(
+    (id: PanelId) => (
+      <ErrorBoundary key={id} fallbackLabel={panelLabel(id)}>
+        {renderDockPanelContent(id)}
+      </ErrorBoundary>
+    ),
+    [renderDockPanelContent],
+  );
+
+  /*
+    First commit must look EXACTLY like the inline splash in index.html.
+    `createRoot()` calls `clearContainer()` on its first commit, so returning
+    anything else here would throw away the boot screen that is already on
+    screen (and it is the frame the window was revealed on). The old
+    `<div className="boot">Markelle</div>` flashed a bare text node in its place.
+    Keys/classes below are intentionally duplicated from index.html — the markup
+    has to survive the hand-off byte-for-byte in layout terms.
+  */
+  if (!ready) {
+    return (
+      <div className="boot-inline" aria-busy="true">
+        <div className="boot-mark" aria-hidden="true">
+          M
+        </div>
+        <div>Markelle</div>
+        <div className="boot-bar" aria-hidden="true">
+          <i />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">
@@ -3192,7 +3405,6 @@ function App() {
           dock={settings.dock}
           graphOpen={graphOpen}
           vaultOpen={Boolean(vault)}
-          hasFile={Boolean(active)}
           pluginsOpen={pluginsOpen}
           scheme={settings.scheme}
           dark={dark}
@@ -3241,16 +3453,9 @@ function App() {
                       epoch={graphEpoch}
                       localHops={settings.graphLocalHops}
                       keepOpenOnNavigate={settings.graphKeepOpen}
-                      onLocalHopsChange={(hops) =>
-                        setSettings((s) => ({ ...s, graphLocalHops: hops }))
-                      }
-                      onKeepOpenChange={(keep) =>
-                        setSettings((s) => ({ ...s, graphKeepOpen: keep }))
-                      }
-                      onOpenFile={(path) => {
-                        if (!settingsRef.current.graphKeepOpen) setGraphOpen(false);
-                        void openPath(path);
-                      }}
+                      onLocalHopsChange={graphOnLocalHopsChange}
+                      onKeepOpenChange={graphOnKeepOpenChange}
+                      onOpenFile={graphOnOpenFile}
                       onBusy={setBusyStable}
                       onStatus={setStatusStable}
                     />
@@ -3317,7 +3522,6 @@ function App() {
                         vaultRoot={vault?.root ?? null}
                         attachmentFolder={settings.attachmentFolder}
                         layout={settings.layout}
-                        fontSize={settings.fontSize}
                         lineWidth={settings.lineWidth}
                         dark={dark}
                         vaultFiles={vaultFiles}
@@ -3356,7 +3560,6 @@ function App() {
                         value={active.content}
                         onChange={(content) => patchActive({ content })}
                         dark={dark}
-                        fontSize={settings.fontSize}
                         vaultFiles={vaultFiles}
                         wordWrap={active.large || active.backendBuffer ? false : settings.sourceWordWrap}
                         lineNumbers={settings.sourceLineNumbers}
@@ -3366,14 +3569,7 @@ function App() {
                         scrollToLine={scrollLine}
                         onScrolledToLine={() => setScrollLine(null)}
                         findRequest={findRequest}
-                        virtualDoc={
-                          active.backendBuffer && active.path
-                            ? {
-                                path: active.path,
-                                totalLines: active.lineCount || 2000,
-                              }
-                            : undefined
-                        }
+                        virtualDoc={sourceVirtualDoc}
                         onPasteFiles={
                           active.truncated || active.backendBuffer || active.large
                             ? undefined
@@ -3387,6 +3583,7 @@ function App() {
                         onViewReady={(v) => {
                           editorViewRef.current = v;
                         }}
+                        onStatus={setStatusStable}
                         header={
                           settings.showProperties ? (
                             <PropertiesStrip
@@ -3410,7 +3607,6 @@ function App() {
                             value={active.content}
                             onChange={(content) => patchActive({ content })}
                             dark={dark}
-                            fontSize={settings.fontSize}
                             vaultFiles={vaultFiles}
                             wordWrap={active.large || active.backendBuffer ? false : settings.sourceWordWrap}
                             lineNumbers={settings.sourceLineNumbers}
@@ -3420,14 +3616,7 @@ function App() {
                             scrollToLine={scrollLine}
                             onScrolledToLine={() => setScrollLine(null)}
                             findRequest={findRequest}
-                            virtualDoc={
-                              active.backendBuffer && active.path
-                                ? {
-                                    path: active.path,
-                                    totalLines: active.lineCount || 2000,
-                                  }
-                                : undefined
-                            }
+                            virtualDoc={sourceVirtualDoc}
                             onPasteFiles={
                               active.truncated || active.backendBuffer || active.large
                                 ? undefined
@@ -3441,6 +3630,7 @@ function App() {
                             onViewReady={(v) => {
                               editorViewRef.current = v;
                             }}
+                            onStatus={setStatusStable}
                           />
                         </Suspense>
                       }
@@ -3464,7 +3654,6 @@ function App() {
                             vaultRoot={vault?.root ?? null}
                             attachmentFolder={settings.attachmentFolder}
                             layout={settings.layout}
-                            fontSize={settings.fontSize}
                             lineWidth={settings.lineWidth}
                             dark={dark}
                             vaultFiles={vaultFiles}
@@ -3528,26 +3717,27 @@ function App() {
           if (s.captureTarget === "inbox") {
             const inboxPath = joinPath(v.root, "Inbox.md");
             await registerAccess([inboxPath]);
-            let prev = "";
+            // Seed the heading only when the file is brand new: append_markdown_file
+            // creates a missing file, so without this a fresh `Inbox.md` would start
+            // with a blank line instead of its title. If it already exists we only
+            // append — never read-modify-write, which would risk truncating a huge note.
             try {
-              const opened = await readMarkdownFile(inboxPath, true);
-              prev = opened.content;
+              await statMarkdownFile(inboxPath);
             } catch {
-              prev = "# Inbox\n";
+              await writeMarkdownFile(inboxPath, "# Inbox\n");
             }
-            await writeMarkdownFile(inboxPath, `${prev.trimEnd()}${block}`);
+            await appendMarkdownFile(inboxPath, block);
             await openPath(inboxPath, false, undefined, { authorize: true });
           } else {
             const daily = createDailyNote(v.root, new Date(), s.dailyFolder);
             await registerAccess([daily.path]);
-            let prev = "";
+            // Seed the daily-note title only on first creation (same reasoning).
             try {
-              const opened = await readMarkdownFile(daily.path, true);
-              prev = opened.content;
+              await statMarkdownFile(daily.path);
             } catch {
-              prev = daily.content;
+              await writeMarkdownFile(daily.path, daily.content);
             }
-            await writeMarkdownFile(daily.path, `${prev.trimEnd()}${block}`);
+            await appendMarkdownFile(daily.path, block);
             await openPath(daily.path, false, undefined, { authorize: true });
           }
           setStatus(t("capture.saved"));
@@ -3574,7 +3764,6 @@ function App() {
       />
       <PluginPanel
         open={pluginsOpen}
-        variant="modal"
         plugins={plugins}
         enabledIds={settings.enabledPlugins}
         onClose={() => setPluginsOpen(false)}

@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useRef,
@@ -33,7 +34,7 @@ interface Props {
 
 const DROP_SIDES: DockSide[] = ["left", "right", "bottom"];
 
-export function DockWorkspace({ layout, onChange, renderPanel, children }: Props) {
+function DockWorkspaceInner({ layout, onChange, renderPanel, children }: Props) {
   useLocale();
   const rootRef = useRef<HTMLDivElement>(null);
   const layoutRef = useRef(layout);
@@ -178,8 +179,18 @@ export function DockWorkspace({ layout, onChange, renderPanel, children }: Props
           side === "left" ? t("dock.left") : side === "right" ? t("dock.right") : t("dock.bottom")
         }
       >
-        <div className="dock-tabs" role="tablist">
-          <div className="dock-tabs-list">
+        <div className="dock-tabs">
+          <div
+            className="dock-tabs-list"
+            role="tablist"
+            aria-label={
+              side === "left"
+                ? t("dock.left")
+                : side === "right"
+                  ? t("dock.right")
+                  : t("dock.bottom")
+            }
+          >
             {slot.panels.map((id) => (
               <button
                 key={id}
@@ -270,3 +281,5 @@ export function DockWorkspace({ layout, onChange, renderPanel, children }: Props
     </div>
   );
 }
+
+export const DockWorkspace = memo(DockWorkspaceInner);

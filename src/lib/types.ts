@@ -11,10 +11,10 @@ export interface ReaderSettings {
   scheme: ColorScheme;
   fontSize: number;
   lineWidth: number;
-  /** @deprecated migrated into dock */
-  tocOpen: boolean;
-  /** @deprecated migrated into dock */
-  vaultSidebarOpen: boolean;
+  /** @deprecated migrated into dock; still READ by storage.ts for legacy blobs. */
+  tocOpen?: boolean;
+  /** @deprecated migrated into dock; still READ by storage.ts for legacy blobs. */
+  vaultSidebarOpen?: boolean;
   lastVaultPath: string | null;
   enabledPlugins: string[];
   /** Distraction-free immersive reading — persisted across sessions */
@@ -118,8 +118,6 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   scheme: "system",
   fontSize: 17,
   lineWidth: 72,
-  tocOpen: true,
-  vaultSidebarOpen: true,
   lastVaultPath: null,
   enabledPlugins: ["focus-mode"],
   immersive: false,

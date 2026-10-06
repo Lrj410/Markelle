@@ -6,7 +6,7 @@
   font-family: "MarkelleGutter";
   font-style: normal;
   font-weight: 400;
-  font-display: block;
+  font-display: swap;
   src:
     url("@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2")
       format("woff2"),

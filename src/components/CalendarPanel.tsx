@@ -89,47 +89,45 @@ export function CalendarPanel({
         </button>
       </div>
       <div className="cal-grid" role="grid" aria-label={label}>
-        <div className="cal-row" role="row" style={{ display: "contents" }}>
-          {dows.map((d) => (
-            <div key={d} className="cal-dow" role="columnheader">
-              {d}
-            </div>
-          ))}
-        </div>
-        {weeks.map((week, wi) => (
-          <div key={`w${wi}`} className="cal-row" role="row" style={{ display: "contents" }}>
-            {week.map((c, i) =>
-              c.day == null ? (
-                <div key={`e${wi}-${i}`} className="cal-cell empty" role="gridcell" aria-hidden />
-              ) : (
-                <button
-                  key={c.ymd}
-                  type="button"
-                  role="gridcell"
-                  className={`cal-cell${c.ymd === todayYmd ? " today" : ""}${
-                    existing.has(c.ymd!) ? " has-note" : ""
-                  }`}
-                  aria-label={
-                    existing.has(c.ymd!)
-                      ? `${c.ymd!} · note`
-                      : c.ymd!
-                  }
-                  aria-current={c.ymd === todayYmd ? "date" : undefined}
-                  onClick={() => {
-                    const path = dailyNotePath(
-                      vaultRoot,
-                      new Date(c.ymd! + "T12:00:00"),
-                      dailyFolder,
-                    );
-                    onOpenDate(path, c.ymd!);
-                  }}
-                >
-                  {c.day}
-                </button>
-              ),
-            )}
+      {/* .cal-grid is a real 7-column grid; cells are direct children so no
+          display:contents row layer can drop role="row" from the a11y tree. */}
+        {dows.map((d) => (
+          <div key={d} className="cal-dow" role="columnheader">
+            {d}
           </div>
         ))}
+        {weeks.flatMap((week, wi) =>
+          week.map((c, i) =>
+            c.day == null ? (
+              <div key={`e${wi}-${i}`} className="cal-cell empty" role="gridcell" aria-hidden />
+            ) : (
+              <button
+                key={c.ymd}
+                type="button"
+                role="gridcell"
+                className={`cal-cell${c.ymd === todayYmd ? " today" : ""}${
+                  existing.has(c.ymd!) ? " has-note" : ""
+                }`}
+                aria-label={
+                  existing.has(c.ymd!)
+                    ? t("calendar.dayHasNote", { date: c.ymd! })
+                    : c.ymd!
+                }
+                aria-current={c.ymd === todayYmd ? "date" : undefined}
+                onClick={() => {
+                  const path = dailyNotePath(
+                    vaultRoot,
+                    new Date(c.ymd! + "T12:00:00"),
+                    dailyFolder,
+                  );
+                  onOpenDate(path, c.ymd!);
+                }}
+              >
+                {c.day}
+              </button>
+            ),
+          ),
+        )}
       </div>
       <p className="settings-hint calendar-hint">{t("calendar.hint")}</p>
     </aside>

@@ -2,15 +2,41 @@
 
 /** Strip absolute paths and internal schemes before sharing/printing. */
 export function sanitizeExportHtml(bodyHtml: string): string {
+  // Remove active content first, regardless of environment. markdown-it runs
+  // with `html:false` today, but this is the declared safety layer for exported
+  // files, so it must actually neutralise scripts / handlers / javascript: URLs.
+  let inert = bodyHtml
+    // Drop script/style/template blocks (element + contents) entirely.
+    .replace(/<(script|style|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "")
+    // Drop any remaining standalone active/embedding tags.
+    .replace(/<\/?(script|style|iframe|object|embed|template|link|meta|base|form)\b[^>]*>/gi, "");
+  // Drop every inline event handler (quoted or unquoted). The HTML parser accepts
+  // an attribute written flush against the previous value's closing quote
+  // (`<a href="x"onclick=…>`) or a self-closing slash (`<img/onerror=…>`), so the
+  // separator before the name may be whitespace, a quote or `/` — not only
+  // whitespace. Stripping can consume the separator a back-to-back handler needed,
+  // so repeat until the string stops shrinking.
+  const eventHandler = /([\s"'/])on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
+  let prev = "";
+  while (prev !== inert) {
+    prev = inert;
+    inert = inert.replace(eventHandler, "$1");
+  }
+  inert = inert
+    // Neutralise javascript: URLs in href/src.
+    .replace(/(href|src|xlink:href)\s*=\s*"\s*javascript:[^"]*"/gi, '$1="#"')
+    .replace(/(href|src|xlink:href)\s*=\s*'\s*javascript:[^']*'/gi, "$1='#'")
+    .replace(/(href|src|xlink:href)\s*=\s*javascript:[^\s>]*/gi, '$1="#"');
+
   if (typeof document === "undefined") {
-    return bodyHtml
+    return inert
       .replace(/\sdata-path="[^"]*"/gi, "")
       .replace(/\shref="markelle-file:[^"]*"/gi, ' href="#"')
       .replace(/\ssrc="mklasset:[^"]*"/gi, ' src=""')
       .replace(/\ssrc="https?:\/\/mklasset\.localhost[^"]*"/gi, ' src=""');
   }
   const wrap = document.createElement("div");
-  wrap.innerHTML = bodyHtml;
+  wrap.innerHTML = inert;
   wrap.querySelectorAll("[data-path]").forEach((el) => el.removeAttribute("data-path"));
   wrap.querySelectorAll("a[href]").forEach((el) => {
     const href = el.getAttribute("href") || "";

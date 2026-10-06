@@ -1,16 +1,53 @@
 name: release
 
-# Tag-driven release (Windows only). Pushing a tag like `v0.1.0` builds the
-# Windows installer and attaches it to a GitHub Release. Unsigned unless the
-# optional signing secrets are provided (Windows: WINDOWS_CERTIFICATE /
-# WINDOWS_CERTIFICATE_PASSWORD).
+# Tag-driven release (Windows only). Pushing a tag like `v0.1.2` builds the
+# Windows installer and attaches it to a GitHub Release. Nothing is published
+# until the `verify` job below passes — a broken build can never ship.
+#
+# The installers are UNSIGNED: Windows SmartScreen will warn on first run
+# (users must pick "仍要运行"). Signing is opt-in via the secrets commented in
+# the publish step; no signing secrets are required for this workflow to run.
 on:
   push:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
 jobs:
+  # Gate the release on the same checks CI runs. `publish` needs this job, so a
+  # type error, failing test, or clippy warning blocks the release.
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
   publish:
+    needs: verify
     runs-on: windows-latest
 
     permissions:

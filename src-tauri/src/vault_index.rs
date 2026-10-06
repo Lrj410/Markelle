@@ -3,13 +3,14 @@ use crate::access::{
 };
 use crate::encoding_util::{read_decoded, read_decoded_range};
 use crate::file_name;
+use crate::util::path_key;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::time::SystemTime;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Manager, State};
 
 pub(crate) const MAX_VAULT_ENTRIES: usize = 8_000;
@@ -149,7 +150,7 @@ pub struct GraphData {
     pub max_nodes: usize,
 }
 
-pub(crate) fn is_markdown_file(path: &Path) -> bool {
+fn is_markdown_file(path: &Path) -> bool {
     matches!(
         path.extension()
             .and_then(|e| e.to_str())
@@ -264,13 +265,6 @@ fn build_tree(
 }
 
 fn walk_markdown_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
-    walk_markdown_files_for_export(root, out)
-}
-
-pub(crate) fn walk_markdown_files_for_export(
-    root: &Path,
-    out: &mut Vec<PathBuf>,
-) -> Result<(), String> {
     let mut visited = HashSet::new();
     walk_markdown_files_inner(root, root, out, &mut visited, 0)
 }
@@ -336,13 +330,19 @@ pub(crate) async fn open_vault(app: AppHandle, root: String) -> Result<VaultInfo
     let info = tauri::async_runtime::spawn_blocking(move || -> Result<VaultInfo, String> {
         let mut file_count = 0usize;
         let mut visited = HashSet::new();
-        let tree = build_tree(&root_for_walk, &root_for_walk, &mut file_count, &mut visited, 0)?
-            .unwrap_or(VaultNode {
-                name: file_name(&root_for_walk),
-                path: root_for_walk.to_string_lossy().to_string(),
-                kind: "dir".into(),
-                children: Some(Vec::new()),
-            });
+        let tree = build_tree(
+            &root_for_walk,
+            &root_for_walk,
+            &mut file_count,
+            &mut visited,
+            0,
+        )?
+        .unwrap_or(VaultNode {
+            name: file_name(&root_for_walk),
+            path: root_for_walk.to_string_lossy().to_string(),
+            kind: "dir".into(),
+            children: Some(Vec::new()),
+        });
         let truncated = file_count >= MAX_VAULT_ENTRIES;
 
         Ok(VaultInfo {
@@ -386,12 +386,12 @@ pub(crate) async fn search_vault(
         let (index, _) = get_or_build_index(&cache, &root_path)?;
 
         let mut hits = Vec::new();
-        for path in index.files {
+        for path in &index.files {
             if hits.len() >= MAX_SEARCH_HITS {
                 break;
             }
 
-            let name = file_name(&path);
+            let name = file_name(path);
             let name_l = name.to_lowercase();
             let path_l = path.to_string_lossy().to_lowercase();
 
@@ -405,7 +405,7 @@ pub(crate) async fn search_vault(
                 continue;
             }
 
-            let meta = match fs::metadata(&path) {
+            let meta = match fs::metadata(path) {
                 Ok(m) => m,
                 Err(_) => continue,
             };
@@ -415,7 +415,7 @@ pub(crate) async fn search_vault(
 
             // Small files: full decode. Large files: buffered line scan (no full load).
             let hit = if meta.len() <= MAX_SEARCH_FILE_BYTES {
-                let Ok((content, _)) = read_decoded(&path) else {
+                let Ok((content, _)) = read_decoded(path) else {
                     continue;
                 };
                 content.lines().enumerate().find_map(|(idx, line)| {
@@ -427,7 +427,7 @@ pub(crate) async fn search_vault(
                     }
                 })
             } else {
-                search_file_streaming(&path, &query)
+                search_file_streaming(path, &query)
             };
 
             if let Some((line, preview)) = hit {
@@ -472,7 +472,10 @@ fn parse_query_tokens(query: &str) -> Vec<QueryToken> {
                     text: None,
                 })
             } else if let Some(path) = token.strip_prefix("path:") {
-                let p = path.trim().trim_matches(|c| c == '/' || c == '\\').to_lowercase();
+                let p = path
+                    .trim()
+                    .trim_matches(|c| c == '/' || c == '\\')
+                    .to_lowercase();
                 if p.is_empty() {
                     return None;
                 }
@@ -549,16 +552,16 @@ pub(crate) async fn query_vault(
         let (index, _) = get_or_build_index(&cache, &root_path)?;
 
         let mut hits = Vec::new();
-        for path in index.files.clone() {
+        for path in &index.files {
             if hits.len() >= MAX_SEARCH_HITS {
                 break;
             }
-            if !path_matches_query(&path, &root_path, &index, &tokens) {
+            if !path_matches_query(path, &root_path, &index, &tokens) {
                 continue;
             }
             hits.push(QueryHit {
                 path: path.to_string_lossy().to_string(),
-                name: file_name(&path),
+                name: file_name(path),
             });
         }
         Ok(hits)
@@ -678,11 +681,11 @@ pub(crate) async fn find_backlinks(
         let (index, _) = get_or_build_index(&cache, &root_path)?;
 
         let mut hits = Vec::new();
-        for path in index.files {
-            if path == note {
+        for path in &index.files {
+            if path == &note {
                 continue;
             }
-            let meta = match fs::metadata(&path) {
+            let meta = match fs::metadata(path) {
                 Ok(m) => m,
                 Err(_) => continue,
             };
@@ -690,10 +693,10 @@ pub(crate) async fn find_backlinks(
                 continue;
             }
 
-            let Ok((content, _)) = read_decoded(&path) else {
+            let Ok((content, _)) = read_decoded(path) else {
                 continue;
             };
-            let name = file_name(&path);
+            let name = file_name(path);
             for (idx, line) in content.lines().enumerate() {
                 if line_has_wikilink_to(line, &needles) {
                     hits.push(BacklinkHit {
@@ -775,7 +778,8 @@ fn extract_markdown_link_targets(content: &str) -> Vec<String> {
                 let after_close = i + 1 + close_bracket + 1;
                 if after_close < bytes.len() && bytes[after_close] == b'(' {
                     if let Some(close_paren) = content[after_close + 1..].find(')') {
-                        let link_target = content[after_close + 1..after_close + 1 + close_paren].trim();
+                        let link_target =
+                            content[after_close + 1..after_close + 1 + close_paren].trim();
                         if !link_target.is_empty()
                             && !link_target.contains("://")
                             && !link_target.starts_with('#')
@@ -783,7 +787,8 @@ fn extract_markdown_link_targets(content: &str) -> Vec<String> {
                             && !link_target.starts_with("javascript:")
                             && !link_target.contains('\n')
                         {
-                            let clean = link_target.split_whitespace().next().unwrap_or(link_target);
+                            let clean =
+                                link_target.split_whitespace().next().unwrap_or(link_target);
                             let clean = clean.split('#').next().unwrap_or(clean);
                             let clean = clean.split('?').next().unwrap_or(clean);
                             if !clean.is_empty() {
@@ -804,6 +809,8 @@ fn extract_markdown_link_targets(content: &str) -> Vec<String> {
 #[derive(Clone)]
 struct VaultIndex {
     files: Vec<PathBuf>,
+    /// `path_key` -> path, for O(1) resolution (graph links, focus lookup).
+    by_path_key: HashMap<String, PathBuf>,
     by_stem: HashMap<String, Vec<PathBuf>>,
     by_name: HashMap<String, PathBuf>,
     by_rel: HashMap<String, PathBuf>,
@@ -817,7 +824,18 @@ struct VaultIndex {
 struct CachedIndex {
     root: PathBuf,
     fingerprint: u64,
-    index: VaultIndex,
+    /// Full content fingerprint of the indexed notes (path-set + per-file size +
+    /// mtime). Recomputed on the time-bounded revalidation so nested content
+    /// changes that never touch the root mtime are still caught when the watcher
+    /// is unavailable or suppressed.
+    content_fingerprint: u64,
+    /// When the cheap [`dir_fingerprint`] check last validated this entry.
+    /// Past [`INDEX_REVALIDATE_INTERVAL`] the full content fingerprint is
+    /// recomputed, bounding worst-case staleness.
+    validated_at: Instant,
+    /// Shared so a cache hit hands out a cheap `Arc` clone instead of deep-copying
+    /// `files` plus several HashMaps on every search/tag/graph query.
+    index: Arc<VaultIndex>,
     /// Lazily filled; None until first graph build for this fingerprint
     graph_edges: Option<Vec<(String, String)>>,
 }
@@ -836,6 +854,38 @@ impl IndexCache {
     }
 }
 
+/// Cheap invalidation signal: the vault root's own mtime (one `stat`).
+///
+/// This replaces a recursive walk that used to `stat` every note on every
+/// lookup. Content changes are handled by the recursive file watcher
+/// (`vault_watch` clears this cache on any change) and by our own writers
+/// clearing it explicitly after a save; the root mtime only needs to catch
+/// top-level create/rename/remove when no watcher is running. A stale index is
+/// worse than a slow one, so the watcher + explicit clears are the primary
+/// invalidation and this is the cheap fallback. The root mtime alone cannot see
+/// nested content edits, so [`get_or_build_index`] additionally revalidates the
+/// full content fingerprint once [`INDEX_REVALIDATE_INTERVAL`] has elapsed.
+fn dir_fingerprint(root: &Path) -> u64 {
+    fs::metadata(root)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// How often the cheap root-mtime check is backed by a full content
+/// fingerprint. Bounds worst-case staleness (watcher unavailable, or a
+/// suppressed self-write window swallowing a real external write) to this
+/// interval, while keeping the common case a single `stat`: a few seconds means
+/// a burst of search/tag/graph queries still hits the fast path, yet a nested
+/// edit is picked up promptly even with no watcher.
+const INDEX_REVALIDATE_INTERVAL: Duration = Duration::from_secs(3);
+
+/// Full content fingerprint: the path-set plus each note's size and mtime. This
+/// is the previous, correct (but recursive) invalidation signal; it is now only
+/// computed when the cheap [`dir_fingerprint`] check is inconclusive or past the
+/// revalidation interval.
 fn vault_content_fingerprint(root: &Path) -> Result<u64, String> {
     let mut files = Vec::new();
     walk_markdown_files(root, &mut files)?;
@@ -950,31 +1000,22 @@ fn extract_all_tags(content: &str) -> HashSet<String> {
     set
 }
 
-fn build_vault_index(root: &Path) -> Result<(VaultIndex, u64), String> {
+fn build_vault_index(root: &Path) -> Result<VaultIndex, String> {
     let mut files = Vec::new();
     walk_markdown_files(root, &mut files)?;
+    let mut by_path_key = HashMap::new();
     let mut by_stem: HashMap<String, Vec<PathBuf>> = HashMap::new();
     let mut by_name = HashMap::new();
     let mut by_rel = HashMap::new();
     let mut by_rel_stem = HashMap::new();
     let mut by_tag: HashMap<String, Vec<PathBuf>> = HashMap::new();
     let mut file_tags: HashMap<PathBuf, HashSet<String>> = HashMap::new();
-    let mut fp: u64 = files.len() as u64;
 
     for path in &files {
-        if let Ok(meta) = fs::metadata(path) {
-            fp = fp
-                .wrapping_mul(31)
-                .wrapping_add(meta.len())
-                .wrapping_mul(31)
-                .wrapping_add(
-                    meta.modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0),
-                );
-        }
+        // Compute the path key once per note; the graph resolver and focus lookup
+        // reuse this map for O(1) lookups instead of scanning `files` per link.
+        by_path_key.insert(path_key(path), path.clone());
+
         let name = file_name(path);
         let stem = note_stem(&name).to_lowercase();
         by_name.insert(name.to_lowercase(), path.clone());
@@ -1004,64 +1045,76 @@ fn build_vault_index(root: &Path) -> Result<(VaultIndex, u64), String> {
         }
     }
 
-    Ok((
-        VaultIndex {
-            files,
-            by_stem,
-            by_name,
-            by_rel,
-            by_rel_stem,
-            by_tag,
-            file_tags,
-        },
-        fp,
-    ))
+    Ok(VaultIndex {
+        files,
+        by_path_key,
+        by_stem,
+        by_name,
+        by_rel,
+        by_rel_stem,
+        by_tag,
+        file_tags,
+    })
 }
 
-fn get_or_build_index(cache: &IndexCache, root: &Path) -> Result<(VaultIndex, u64), String> {
-    // Hit path: one fingerprint walk. Miss/stale: one build walk (includes fingerprint).
+fn get_or_build_index(cache: &IndexCache, root: &Path) -> Result<(Arc<VaultIndex>, u64), String> {
+    get_or_build_index_with_interval(cache, root, INDEX_REVALIDATE_INTERVAL)
+}
+
+/// [`get_or_build_index`] with an injectable revalidation interval so the
+/// time-bounded full revalidation is unit-testable without sleeping.
+fn get_or_build_index_with_interval(
+    cache: &IndexCache,
+    root: &Path,
+    interval: Duration,
+) -> Result<(Arc<VaultIndex>, u64), String> {
+    // Cache hit: one cheap `stat` of the vault root and an `Arc` clone. The index
+    // is deep-cloned only when it actually has to be (re)built.
+    let fingerprint = dir_fingerprint(root);
     {
         let guard = cache.0.lock().map_err(|_| "索引缓存锁失败".to_string())?;
-        let maybe = guard.as_ref().filter(|c| c.root == root).map(|c| c.fingerprint);
-        drop(guard);
-        if let Some(cached_fp) = maybe {
-            let fingerprint = vault_content_fingerprint(root)?;
-            if cached_fp == fingerprint {
-                let guard = cache.0.lock().map_err(|_| "索引缓存锁失败".to_string())?;
-                if let Some(cached) = guard.as_ref() {
-                    if cached.root == root && cached.fingerprint == fingerprint {
-                        return Ok((cached.index.clone(), fingerprint));
-                    }
-                }
+        if let Some(cached) = guard.as_ref() {
+            if cached.root == root
+                && cached.fingerprint == fingerprint
+                && cached.validated_at.elapsed() < interval
+            {
+                return Ok((Arc::clone(&cached.index), fingerprint));
             }
         }
     }
-    let (index, built_fp) = build_vault_index(root)?;
+    // Fast path missed: either the cheap fingerprint changed or the validation
+    // window elapsed. Recompute the full content fingerprint; if the content is
+    // unchanged only the validity window needs refreshing (no rebuild).
+    let content_fingerprint = vault_content_fingerprint(root)?;
+    {
+        let mut guard = cache.0.lock().map_err(|_| "索引缓存锁失败".to_string())?;
+        if let Some(cached) = guard.as_mut() {
+            if cached.root == root && cached.content_fingerprint == content_fingerprint {
+                cached.fingerprint = fingerprint;
+                cached.validated_at = Instant::now();
+                return Ok((Arc::clone(&cached.index), fingerprint));
+            }
+        }
+    }
+    let index = Arc::new(build_vault_index(root)?);
     let mut guard = cache.0.lock().map_err(|_| "索引缓存锁失败".to_string())?;
     *guard = Some(CachedIndex {
         root: root.to_path_buf(),
-        fingerprint: built_fp,
-        index: index.clone(),
+        fingerprint,
+        content_fingerprint,
+        validated_at: Instant::now(),
+        index: Arc::clone(&index),
         graph_edges: None,
     });
-    Ok((index, built_fp))
+    Ok((index, fingerprint))
 }
 
 fn path_id(path: &Path) -> String {
     path.to_string_lossy().replace('/', "\\")
 }
 
-pub(crate) fn path_key(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/").to_lowercase()
-}
-
 fn find_indexed_path(index: &VaultIndex, focus: &Path) -> Option<PathBuf> {
-    let key = path_key(focus);
-    index
-        .files
-        .iter()
-        .find(|p| path_key(p) == key)
-        .cloned()
+    index.by_path_key.get(&path_key(focus)).cloned()
 }
 
 /// Media / binary wiki targets must not become orphan graph nodes.
@@ -1124,11 +1177,11 @@ fn resolve_wiki_target_graph(
         if let Some(parent) = src.parent() {
             let candidate = parent.join(&raw);
             let cand_key = path_key(&candidate);
-            if let Some(p) = index.files.iter().find(|p| path_key(p) == cand_key) {
+            if let Some(p) = index.by_path_key.get(&cand_key) {
                 return Ok(p.clone());
             }
             let cand_key_md = format!("{cand_key}.md");
-            if let Some(p) = index.files.iter().find(|p| path_key(p) == cand_key_md) {
+            if let Some(p) = index.by_path_key.get(&cand_key_md) {
                 return Ok(p.clone());
             }
         }
@@ -1136,7 +1189,11 @@ fn resolve_wiki_target_graph(
 
     let key = raw.to_lowercase();
     let key_no_ext = note_stem(&key);
-    let base = key_no_ext.rsplit('/').next().unwrap_or(&key_no_ext).to_string();
+    let base = key_no_ext
+        .rsplit('/')
+        .next()
+        .unwrap_or(&key_no_ext)
+        .to_string();
 
     if let Some(p) = index
         .by_rel
@@ -1169,7 +1226,9 @@ fn resolve_wiki_target_graph(
 fn compute_graph_edges(index: &VaultIndex) -> Vec<(String, String)> {
     let mut edges: Vec<(String, String)> = Vec::new();
     for path in &index.files {
-        let Ok(meta) = fs::metadata(path) else { continue };
+        let Ok(meta) = fs::metadata(path) else {
+            continue;
+        };
         if !meta.is_file() || meta.len() > MAX_SEARCH_FILE_BYTES {
             continue;
         }
@@ -1271,7 +1330,7 @@ pub(crate) async fn build_vault_graph(
         let cache = app.state::<IndexCache>();
         let (index, fingerprint) = get_or_build_index(&cache, &root_path)?;
         let edges = get_or_compute_graph_edges(&cache, &root_path, &index, fingerprint)?;
-        build_vault_graph_inner(index, edges, mode_flag, focus, hops)
+        build_vault_graph_inner(&index, edges, mode_flag, focus, hops)
     })
     .await
     .map_err(|e| format!("图谱任务失败: {e}"))?
@@ -1323,7 +1382,7 @@ fn local_neighborhood(
 }
 
 fn build_vault_graph_inner(
-    index: VaultIndex,
+    index: &VaultIndex,
     mut edges: Vec<(String, String)>,
     mode: &str,
     focus_path: Option<String>,
@@ -1335,7 +1394,7 @@ fn build_vault_graph_inner(
     let focus_resolved = focus_path
         .as_ref()
         .map(PathBuf::from)
-        .and_then(|p| find_indexed_path(&index, &p).or(Some(p)));
+        .and_then(|p| find_indexed_path(index, &p).or(Some(p)));
     let focus_key = focus_resolved.as_ref().map(|p| path_key(p));
 
     let ensure_file_node = |meta: &mut HashMap<String, GraphNode>, path: &Path| {
@@ -1353,7 +1412,9 @@ fn build_vault_graph_inner(
 
     // Rebuild nodes from the index + cached edges (no content re-read).
     for path in &index.files {
-        let Ok(meta) = fs::metadata(path) else { continue };
+        let Ok(meta) = fs::metadata(path) else {
+            continue;
+        };
         if !meta.is_file() || meta.len() > MAX_SEARCH_FILE_BYTES {
             continue;
         }
@@ -1456,7 +1517,6 @@ fn build_vault_graph_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn note_stem_strips_markdown_extensions() {
@@ -1468,10 +1528,7 @@ mod tests {
 
     #[test]
     fn parse_wikilink_target_strips_alias_and_heading() {
-        assert_eq!(
-            parse_wikilink_target("Foo|Alias"),
-            Some("Foo".to_string())
-        );
+        assert_eq!(parse_wikilink_target("Foo|Alias"), Some("Foo".to_string()));
         assert_eq!(
             parse_wikilink_target("Bar#heading"),
             Some("Bar".to_string())
@@ -1483,13 +1540,66 @@ mod tests {
         assert_eq!(parse_wikilink_target("  "), None);
     }
 
+    /// Build a minimal index the way `build_vault_index` does, so graph
+    /// resolution can be exercised without touching the filesystem.
+    fn index_with(files: Vec<PathBuf>) -> VaultIndex {
+        let mut by_path_key = HashMap::new();
+        let mut by_name = HashMap::new();
+        let mut by_stem: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        for p in &files {
+            by_path_key.insert(path_key(p), p.clone());
+            let name = file_name(p);
+            by_name.insert(name.to_lowercase(), p.clone());
+            by_stem
+                .entry(note_stem(&name).to_lowercase())
+                .or_default()
+                .push(p.clone());
+        }
+        VaultIndex {
+            files,
+            by_path_key,
+            by_stem,
+            by_name,
+            by_rel: HashMap::new(),
+            by_rel_stem: HashMap::new(),
+            by_tag: HashMap::new(),
+            file_tags: HashMap::new(),
+        }
+    }
+
+    /// R3: the path-key map must resolve exactly as the old per-link linear scan
+    /// did, including the ambiguous-stem conflict case.
     #[test]
-    fn path_key_normalizes_slashes_and_case() {
-        let p = Path::new(r"C:\Vault\Notes\Hello.MD");
-        let key = path_key(p);
-        assert!(key.contains('/'));
-        assert!(!key.contains('\\'));
-        assert_eq!(key, key.to_lowercase());
+    fn wiki_resolution_uses_path_key_index() {
+        // Same-directory wikilink resolves to the sibling via the path-key map.
+        let a = PathBuf::from("/vault/notes/Alpha.md");
+        let index = index_with(vec![a.clone()]);
+        assert_eq!(
+            resolve_wiki_target_graph(&index, Some(&a), "Alpha.md").unwrap(),
+            a
+        );
+        assert_eq!(
+            resolve_wiki_target_graph(&index, Some(&a), "Alpha").unwrap(),
+            a
+        );
+
+        // Two notes sharing a stem with no exact name match → conflict, not an
+        // arbitrary pick (duplicate-looking keys must stay distinguishable).
+        let dup = index_with(vec![
+            PathBuf::from("/vault/notes/Shared.markdown"),
+            PathBuf::from("/vault/archive/Shared.mdown"),
+        ]);
+        assert_eq!(
+            resolve_wiki_target_graph(&dup, None, "Shared").unwrap_err(),
+            "conflict:shared"
+        );
+
+        // The map lookup must agree with the path_key scan it replaced.
+        for idx in [&index, &dup] {
+            for p in &idx.files {
+                assert_eq!(idx.by_path_key.get(&path_key(p)), Some(p));
+            }
+        }
     }
 
     #[test]
@@ -1547,5 +1657,43 @@ mod tests {
         assert!(keep2.contains("C"));
         assert!(!keep2.contains("D"));
         assert_eq!(e2.len(), 2);
+    }
+
+    /// The root mtime (`dir_fingerprint`) cannot see nested content edits, so a
+    /// watcher-less / suppressed change would otherwise stay stale forever. Once
+    /// [`INDEX_REVALIDATE_INTERVAL`] elapses the full content fingerprint is
+    /// recomputed and the index is rebuilt.
+    #[test]
+    fn nested_change_is_revalidated_after_interval() {
+        let root = std::env::temp_dir().join(format!("mkl-idx-revalidate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/a.md"), "# a").unwrap();
+
+        let cache = IndexCache::new();
+        // A long interval makes the fast path observable: within it we stay cached.
+        let long = Duration::from_secs(60);
+        let (idx1, _) = get_or_build_index_with_interval(&cache, &root, long).unwrap();
+        assert_eq!(idx1.files.len(), 1);
+
+        // Mutate a NESTED file without touching the watcher; the root mtime is
+        // unchanged, so the cheap fingerprint alone cannot see it.
+        std::fs::write(root.join("sub/b.md"), "# b").unwrap();
+        let (idx2, _) = get_or_build_index_with_interval(&cache, &root, long).unwrap();
+        assert_eq!(
+            idx2.files.len(),
+            1,
+            "within the interval the cheap fast path is expected"
+        );
+
+        // Past the interval the full content fingerprint is recomputed → rebuild.
+        let (idx3, _) = get_or_build_index_with_interval(&cache, &root, Duration::ZERO).unwrap();
+        assert_eq!(
+            idx3.files.len(),
+            2,
+            "index must be rebuilt after the revalidation interval"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

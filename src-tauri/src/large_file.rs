@@ -6,8 +6,9 @@
 //! - Serve windows by seek + decode; WebView only ever sees the visible slice.
 //! - Edits use a sparse overlay; save streams a rewrite when needed.
 
-use crate::access::{ensure_allowed, is_symlink, AppState};
+use crate::access::{ensure_allowed, is_symlink, is_under, AppState};
 use crate::encoding_util::read_decoded_range;
+use crate::util::{meta_mtime_ms, path_key};
 use crate::{FIRST_CHUNK_BYTES, HYDRATE_CHUNK_BYTES};
 use memmap2::Mmap;
 use serde::Serialize;
@@ -16,14 +17,46 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(250);
 const INDEX_CHUNK: usize = 8 * 1024 * 1024;
+/// Upper bound on indexed line starts. One `u64` per `\n` means a pathological
+/// 10 GB file could otherwise push ~5 billion entries (~40 GB RAM) and OOM.
+const MAX_INDEXED_LINES: usize = 20_000_000;
+/// Surfaced via [`LargeFileProgress::error`] when the bound above is reached.
+const INDEX_LIMIT_MSG: &str = "文件行数过多，已按上限建立部分索引";
+/// Upper bound on cached files. Each entry may hold a multi-GB mmap + line index,
+/// so without a bound closed/unauthorized vaults would keep them alive forever.
+const MAX_STORE_ENTRIES: usize = 8;
 
 #[derive(Default)]
 pub struct LargeFileStore(pub Mutex<HashMap<String, LargeFileEntry>>);
+
+impl LargeFileStore {
+    /// Drop every cached entry whose file lives under `root` (vault revocation).
+    pub fn clear_under_root(&self, root: &Path) {
+        let Ok(mut guard) = self.0.lock() else {
+            return;
+        };
+        guard.retain(|_, entry| !is_under(&entry.path, root));
+    }
+}
+
+/// Evict least-recently-used entries until the store is within [`MAX_STORE_ENTRIES`].
+fn evict_lru(guard: &mut HashMap<String, LargeFileEntry>) {
+    while guard.len() > MAX_STORE_ENTRIES {
+        let Some(oldest) = guard
+            .iter()
+            .min_by_key(|(_, e)| e.last_used)
+            .map(|(k, _)| k.clone())
+        else {
+            break;
+        };
+        guard.remove(&oldest);
+    }
+}
 
 #[derive(Clone)]
 pub struct LargeFileEntry {
@@ -41,6 +74,8 @@ pub struct LargeFileEntry {
     pub ends_with_newline: bool,
     /// Sparse edits: 0-based line index → line text (no trailing newline).
     pub edits: HashMap<usize, String>,
+    /// Last time this entry was read/created — LRU eviction key.
+    pub last_used: Instant,
 }
 
 pub fn open_mmap(path: &Path) -> Option<Arc<Mmap>> {
@@ -51,6 +86,22 @@ pub fn open_mmap(path: &Path) -> Option<Arc<Mmap>> {
     }
     // SAFETY: We only read from the mmap. The file is opened read-only.
     unsafe { Mmap::map(&file) }.ok().map(Arc::new)
+}
+
+/// Returns the mmap only when it still matches the on-disk file length.
+///
+/// A cached `Mmap` is fixed at the length it was mapped with. If the file is
+/// truncated outside the app, slicing past the new EOF faults (SIGBUS on unix,
+/// an access violation on Windows) and aborts the process, so every slice read
+/// must revalidate against a fresh `metadata` first and fall back when stale.
+fn mmap_if_current(entry: &LargeFileEntry) -> Option<&Arc<Mmap>> {
+    let mmap = entry.mmap.as_ref()?;
+    let len = fs::metadata(&entry.path).ok()?.len();
+    if len == mmap.len() as u64 && len == entry.size_bytes {
+        Some(mmap)
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,18 +125,6 @@ pub struct LargeFileLines {
     pub partial: bool,
 }
 
-fn path_key(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/").to_lowercase()
-}
-
-fn meta_mtime_ms(meta: &fs::Metadata) -> u64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 fn ensure_under_cap(size: u64) -> Result<(), String> {
     crate::ensure_file_under_hard_cap(size)
 }
@@ -94,35 +133,56 @@ fn emit_progress(app: &AppHandle, progress: LargeFileProgress) {
     let _ = app.emit("large-file-progress", progress);
 }
 
-/// Scan `[from, to)` for `\n` and append line-start offsets. Returns `(bytes_indexed, ends_with_newline)`.
+/// Scan `[from, to)` for `\n` and append line-start offsets.
+///
+/// Returns `(bytes_indexed, ends_with_newline, index_full)`. `index_full` is set
+/// when [`MAX_INDEXED_LINES`] stopped the scan early — the caller must then mark
+/// the entry `partial` and surface [`INDEX_LIMIT_MSG`].
+///
+/// The mmap slice is bounded by the *current* on-disk length as well as the map's
+/// length, so a file truncated outside the app cannot be read past its new EOF.
 fn scan_line_index(
     path: &Path,
     mmap: Option<&[u8]>,
     from: u64,
     to: u64,
     starts: &mut Vec<u64>,
-) -> Result<(u64, bool), String> {
+    max_lines: usize,
+) -> Result<(u64, bool, bool), String> {
     if to <= from {
-        return Ok((from, false));
+        return Ok((from, false, false));
     }
     if let Some(mm) = mmap {
-        let file_len = mm.len() as u64;
+        let real_len = fs::metadata(path)
+            .map(|m| m.len())
+            .unwrap_or(mm.len() as u64);
+        let file_len = (mm.len() as u64).min(real_len);
         let start_pos = from.min(file_len) as usize;
         let end_pos = to.min(file_len) as usize;
         if start_pos >= end_pos {
-            return Ok((from, false));
+            return Ok((from, false, false));
         }
         let slice = &mm[start_pos..end_pos];
+        let mut indexed = end_pos as u64;
+        let mut full = false;
         for (i, &b) in slice.iter().enumerate() {
             if b == b'\n' {
+                if starts.len() >= max_lines {
+                    indexed = (start_pos + i + 1) as u64;
+                    full = true;
+                    break;
+                }
                 let next = (start_pos + i + 1) as u64;
                 if next < file_len {
                     starts.push(next);
                 }
             }
         }
-        let ends_with_nl = slice.last() == Some(&b'\n');
-        return Ok((end_pos as u64, ends_with_nl));
+        // When the line-index bound stops the scan early, the byte-reading branch
+        // reports `ends_with_newline = false`; mirror that here instead of
+        // inspecting the whole slice's last byte (which is past the stop point).
+        let ends_with_nl = !full && slice.last() == Some(&b'\n');
+        return Ok((indexed, ends_with_nl, full));
     }
 
     let mut file = File::open(path).map_err(|e| format!("无法读取文件: {e}"))?;
@@ -131,9 +191,10 @@ fn scan_line_index(
 
     let mut offset = from;
     let mut ends_with_nl = false;
+    let mut full = false;
     let mut buf = vec![0u8; INDEX_CHUNK.min((to - from) as usize).max(64 * 1024)];
 
-    while offset < to {
+    while offset < to && !full {
         let want = ((to - offset) as usize).min(buf.len());
         let n = file
             .read(&mut buf[..want])
@@ -141,24 +202,43 @@ fn scan_line_index(
         if n == 0 {
             break;
         }
-        ends_with_nl = scan_line_index_bytes(offset, &buf[..n], to, starts);
+        let (ended_nl, stopped_at) =
+            scan_line_index_bytes(offset, &buf[..n], to, starts, max_lines);
+        if let Some(pos) = stopped_at {
+            offset = pos;
+            full = true;
+            break;
+        }
+        ends_with_nl = ended_nl;
         offset += n as u64;
     }
 
-    Ok((offset.min(to), ends_with_nl))
+    Ok((offset.min(to), ends_with_nl, full))
 }
 
 /// In-memory newline scan — used when open already held the first chunk bytes.
-fn scan_line_index_bytes(base: u64, buf: &[u8], file_end: u64, starts: &mut Vec<u64>) -> bool {
+///
+/// Returns `(ends_with_newline, stopped_at)`: `stopped_at` is the absolute byte
+/// offset just past the newline at which [`MAX_INDEXED_LINES`] halted the scan.
+fn scan_line_index_bytes(
+    base: u64,
+    buf: &[u8],
+    file_end: u64,
+    starts: &mut Vec<u64>,
+    max_lines: usize,
+) -> (bool, Option<u64>) {
     for (i, b) in buf.iter().enumerate() {
         if *b == b'\n' {
+            if starts.len() >= max_lines {
+                return (false, Some(base + i as u64 + 1));
+            }
             let next = base + i as u64 + 1;
             if next < file_end {
                 starts.push(next);
             }
         }
     }
-    buf.last() == Some(&b'\n')
+    (buf.last() == Some(&b'\n'), None)
 }
 
 fn finalize_line_starts(starts: &mut Vec<u64>, size: u64) {
@@ -211,12 +291,13 @@ fn read_line_from_disk(entry: &LargeFileEntry, line_idx: usize) -> Result<String
         return Ok(String::new());
     }
 
-    if let Some(mmap) = &entry.mmap {
+    if let Some(mmap) = mmap_if_current(entry) {
         let from_idx = from as usize;
         let to_idx = (to as usize).min(mmap.len());
         if to_idx > from_idx {
             let slice = &mmap[from_idx..to_idx];
-            let (text, _) = crate::encoding_util::decode_with_hint(slice, Some(&entry.encoding), false);
+            let (text, _) =
+                crate::encoding_util::decode_with_hint(slice, Some(&entry.encoding), false);
             return Ok(strip_line_ending(text));
         }
     }
@@ -283,12 +364,13 @@ fn read_lines_run_from_disk(
         return Ok(vec![String::new(); end - start]);
     }
 
-    let text = if let Some(mmap) = &entry.mmap {
+    let text = if let Some(mmap) = mmap_if_current(entry) {
         let from_idx = from as usize;
         let to_idx = (to as usize).min(mmap.len());
         if to_idx > from_idx {
             let slice = &mmap[from_idx..to_idx];
-            let (text, _) = crate::encoding_util::decode_with_hint(slice, Some(&entry.encoding), false);
+            let (text, _) =
+                crate::encoding_util::decode_with_hint(slice, Some(&entry.encoding), false);
             text
         } else {
             String::new()
@@ -320,7 +402,11 @@ fn read_lines_run_from_disk(
 }
 
 /// Serve a line window with batched disk I/O; sparse edits break the run.
-fn read_lines_window(entry: &LargeFileEntry, start: usize, take: usize) -> Result<Vec<String>, String> {
+fn read_lines_window(
+    entry: &LargeFileEntry,
+    start: usize,
+    take: usize,
+) -> Result<Vec<String>, String> {
     let total = entry.file_line_starts.len();
     if take == 0 || total == 0 {
         return Ok(Vec::new());
@@ -359,21 +445,21 @@ fn finalize_hydrate_entry(
     encoding: String,
     mtime_ms: u64,
     size: u64,
+    bytes_indexed: u64,
     ends_with_newline: bool,
+    partial: bool,
 ) -> Result<(), String> {
-    let mut guard = store
-        .0
-        .lock()
-        .map_err(|_| "大文件缓存锁失败".to_string())?;
+    let mut guard = store.0.lock().map_err(|_| "大文件缓存锁失败".to_string())?;
     if guard.contains_key(key) {
         if let Some(entry) = guard.get_mut(key) {
             entry.file_line_starts = starts;
             entry.encoding = encoding;
             entry.mtime_ms = mtime_ms;
             entry.size_bytes = size;
-            entry.bytes_indexed = size;
-            entry.partial = false;
+            entry.bytes_indexed = bytes_indexed;
+            entry.partial = partial;
             entry.ends_with_newline = ends_with_newline;
+            entry.last_used = Instant::now();
             // `entry.edits` intentionally left untouched.
         }
     } else {
@@ -386,12 +472,14 @@ fn finalize_hydrate_entry(
                 encoding,
                 mtime_ms,
                 size_bytes: size,
-                bytes_indexed: size,
-                partial: false,
+                bytes_indexed,
+                partial,
                 ends_with_newline,
                 edits: HashMap::new(),
+                last_used: Instant::now(),
             },
         );
+        evict_lru(&mut guard);
     }
     Ok(())
 }
@@ -425,10 +513,12 @@ pub(crate) async fn hydrate_large_file(
     path: String,
 ) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
+    // Authorize first: an existence check before `ensure_allowed` would leak
+    // whether an unauthorized path exists on disk.
+    ensure_allowed(&state, &path_buf)?;
     if !path_buf.exists() {
         return Err(format!("文件不存在: {}", path_buf.display()));
     }
-    ensure_allowed(&state, &path_buf)?;
     if is_symlink(&path_buf) {
         return Err("拒绝通过符号链接读取文件".into());
     }
@@ -440,10 +530,7 @@ pub(crate) async fn hydrate_large_file(
     let key = path_key(&path_buf);
 
     let (resume_starts, resume_offset, resume_enc, resume_ends_nl) = {
-        let mut guard = store
-            .0
-            .lock()
-            .map_err(|_| "大文件缓存锁失败".to_string())?;
+        let mut guard = store.0.lock().map_err(|_| "大文件缓存锁失败".to_string())?;
         if let Some(entry) = guard.get(&key) {
             if entry.mtime_ms == mtime_ms
                 && entry.size_bytes == size
@@ -498,14 +585,14 @@ pub(crate) async fn hydrate_large_file(
             starts.push(0);
         }
 
+        // A resumed index may already be at the line cap; never re-scan past it.
+        let mut index_full = starts.len() >= MAX_INDEXED_LINES;
+
         let mmap = open_mmap(&path_buf);
 
         // Publish seed snapshot immediately.
         {
-            let mut guard = store
-                .0
-                .lock()
-                .map_err(|_| "大文件缓存锁失败".to_string())?;
+            let mut guard = store.0.lock().map_err(|_| "大文件缓存锁失败".to_string())?;
             guard.insert(
                 key.clone(),
                 LargeFileEntry {
@@ -516,11 +603,13 @@ pub(crate) async fn hydrate_large_file(
                     mtime_ms,
                     size_bytes: size,
                     bytes_indexed: offset,
-                    partial: offset < size,
+                    partial: index_full || offset < size,
                     ends_with_newline: ends_nl,
                     edits: HashMap::new(),
+                    last_used: Instant::now(),
                 },
             );
+            evict_lru(&mut guard);
         }
         emit_progress(
             &app2,
@@ -539,43 +628,51 @@ pub(crate) async fn hydrate_large_file(
             .checked_sub(PROGRESS_EMIT_INTERVAL)
             .unwrap_or_else(Instant::now);
 
-        while offset < size {
+        while offset < size && !index_full {
             let chunk_size = if mmap.is_some() {
                 32 * 1024 * 1024
             } else {
                 HYDRATE_CHUNK_BYTES.max(FIRST_CHUNK_BYTES)
             };
             let chunk_end = (offset + chunk_size).min(size);
-            let (next, chunk_ends_nl) = scan_line_index(&path_buf, mmap.as_deref().map(|m| &m[..]), offset, chunk_end, &mut starts)?;
+            let (next, chunk_ends_nl, full) = scan_line_index(
+                &path_buf,
+                mmap.as_deref().map(|m| &m[..]),
+                offset,
+                chunk_end,
+                &mut starts,
+                MAX_INDEXED_LINES,
+            )?;
             if next <= offset {
                 offset = chunk_end;
             } else {
                 offset = next;
             }
             ends_nl = chunk_ends_nl;
+            if full {
+                index_full = true;
+            }
 
             {
-                let mut guard = store
-                    .0
-                    .lock()
-                    .map_err(|_| "大文件缓存锁失败".to_string())?;
+                let mut guard = store.0.lock().map_err(|_| "大文件缓存锁失败".to_string())?;
                 if let Some(entry) = guard.get_mut(&key) {
                     // Append only — avoid cloning the full index every chunk (GB files).
                     let prev = entry.file_line_starts.len();
                     if starts.len() > prev {
-                        entry
-                            .file_line_starts
-                            .extend_from_slice(&starts[prev..]);
+                        entry.file_line_starts.extend_from_slice(&starts[prev..]);
                     }
                     entry.bytes_indexed = offset.min(size);
-                    entry.partial = offset < size;
+                    entry.partial = index_full || offset < size;
                     entry.ends_with_newline = ends_nl;
                     entry.encoding = encoding.clone();
                 }
             }
 
             let now = Instant::now();
-            if offset >= size || now.duration_since(last_emit) >= PROGRESS_EMIT_INTERVAL {
+            if index_full
+                || offset >= size
+                || now.duration_since(last_emit) >= PROGRESS_EMIT_INTERVAL
+            {
                 emit_progress(
                     &app2,
                     progress_payload(
@@ -585,7 +682,7 @@ pub(crate) async fn hydrate_large_file(
                         false,
                         true,
                         starts.len(),
-                        None,
+                        index_full.then(|| INDEX_LIMIT_MSG.to_string()),
                     ),
                 );
                 last_emit = now;
@@ -594,6 +691,11 @@ pub(crate) async fn hydrate_large_file(
 
         finalize_line_starts(&mut starts, size);
         let line_count = starts.len();
+        // When the scan stopped at the line cap, `bytes_indexed` is the offset we
+        // actually reached — using `size` would make the last indexed line read to
+        // EOF (potentially GBs).
+        let bytes_indexed = offset.min(size);
+        let partial = index_full || offset < size;
         finalize_hydrate_entry(
             &store,
             &key,
@@ -602,19 +704,29 @@ pub(crate) async fn hydrate_large_file(
             encoding,
             mtime_ms,
             size,
+            bytes_indexed,
             ends_nl,
+            partial,
         )?;
 
-        Ok::<_, String>((path_for_emit, size, line_count))
+        Ok::<_, String>((path_for_emit, size, line_count, index_full))
     })
     .await
     .map_err(|e| format!("大文件加载任务失败: {e}"))?;
 
     match result {
-        Ok((display, size, line_count)) => {
+        Ok((display, size, line_count, index_full)) => {
             emit_progress(
                 &app,
-                progress_payload(display, size, size, true, true, line_count, None),
+                progress_payload(
+                    display,
+                    size,
+                    size,
+                    true,
+                    true,
+                    line_count,
+                    index_full.then(|| INDEX_LIMIT_MSG.to_string()),
+                ),
             );
             Ok(())
         }
@@ -656,13 +768,24 @@ fn large_file_lines_blocking(
 
     // Snapshot under the lock, then read disk unlocked so hydrate can append indexes.
     let (mut snap, start, take, total, partial) = {
-        let guard = store
-            .0
-            .lock()
-            .map_err(|_| "大文件缓存锁失败".to_string())?;
+        let mut guard = store.0.lock().map_err(|_| "大文件缓存锁失败".to_string())?;
         let entry = guard
-            .get(&key)
+            .get_mut(&key)
             .ok_or_else(|| "大文件尚未就绪".to_string())?;
+
+        // The window is served from a cached line index + mmap. If the file was
+        // edited outside the app, those offsets are stale and would return wrong
+        // text, so revalidate against a fresh metadata before serving.
+        let meta = fs::metadata(path_buf).map_err(|e| format!("无法读取文件信息: {e}"))?;
+        let size_now = meta.len();
+        let mtime_now = meta_mtime_ms(&meta);
+        if size_now != entry.size_bytes
+            || (entry.mtime_ms != 0 && mtime_now != 0 && mtime_now != entry.mtime_ms)
+        {
+            return Err("文件已被外部修改，内容可能已过期，请重新加载该大文件".into());
+        }
+
+        entry.last_used = Instant::now();
         let total = entry.file_line_starts.len();
         let partial = entry.partial;
         if total == 0 {
@@ -701,6 +824,7 @@ fn large_file_lines_blocking(
             partial,
             ends_with_newline: entry.ends_with_newline,
             edits,
+            last_used: Instant::now(),
         };
         (snap, start, take, total, partial)
     };
@@ -727,10 +851,7 @@ pub(crate) fn large_file_close(
     let path_buf = PathBuf::from(&path);
     ensure_allowed(&state, &path_buf)?;
     let key = path_key(&path_buf);
-    let mut guard = store
-        .0
-        .lock()
-        .map_err(|_| "大文件缓存锁失败".to_string())?;
+    let mut guard = store.0.lock().map_err(|_| "大文件缓存锁失败".to_string())?;
     guard.remove(&key);
     Ok(())
 }
@@ -750,9 +871,11 @@ mod tests {
             write!(f, "a\nb\nc").unwrap();
         }
         let mut starts = vec![0u64];
-        let (indexed, ends) = scan_line_index(&path, None, 0, 5, &mut starts).unwrap();
+        let (indexed, ends, full) =
+            scan_line_index(&path, None, 0, 5, &mut starts, MAX_INDEXED_LINES).unwrap();
         assert_eq!(indexed, 5);
         assert!(!ends);
+        assert!(!full);
         assert_eq!(starts, vec![0, 2, 4]);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -773,8 +896,9 @@ mod tests {
         let store = LargeFileStore::default();
         let key = path_key(&path);
         let mut starts = vec![0u64];
-        let (indexed, ends_nl) =
-            scan_line_index(&path, None, 0, meta.len(), &mut starts).unwrap();
+        let (indexed, ends_nl, full) =
+            scan_line_index(&path, None, 0, meta.len(), &mut starts, MAX_INDEXED_LINES).unwrap();
+        assert!(!full);
         {
             let mut g = store.0.lock().unwrap();
             g.insert(
@@ -790,6 +914,7 @@ mod tests {
                     partial: false,
                     ends_with_newline: ends_nl,
                     edits: HashMap::new(),
+                    last_used: Instant::now(),
                 },
             );
         }
@@ -837,6 +962,7 @@ mod tests {
                     partial: true,
                     ends_with_newline: false,
                     edits: HashMap::from([(0usize, "edited line".to_string())]),
+                    last_used: Instant::now(),
                 },
             );
         }
@@ -849,7 +975,9 @@ mod tests {
             "utf-8".into(),
             2,
             8,
+            8,
             true,
+            false,
         )
         .unwrap();
 
@@ -875,6 +1003,8 @@ mod tests {
             "utf-8".into(),
             5,
             9,
+            9,
+            false,
             false,
         )
         .unwrap();
@@ -884,5 +1014,178 @@ mod tests {
         assert_eq!(entry.bytes_indexed, 9);
         assert!(!entry.partial);
         assert!(entry.edits.is_empty());
+    }
+
+    /// The line index must stop at the cap (a 10 GB file could otherwise push
+    /// billions of offsets and OOM), and the resulting entry must stay `partial`.
+    #[test]
+    fn line_index_bound_stops_and_marks_partial() {
+        let dir = std::env::temp_dir().join(format!("mkl-lf-bound-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("many.md");
+        {
+            let mut f = File::create(&path).unwrap();
+            for i in 0..10 {
+                writeln!(f, "line-{i}").unwrap();
+            }
+        }
+        let size = fs::metadata(&path).unwrap().len();
+
+        // Small cap stands in for MAX_INDEXED_LINES.
+        let mut starts = vec![0u64];
+        let (indexed, _ends_nl, full) =
+            scan_line_index(&path, None, 0, size, &mut starts, 3).unwrap();
+        assert!(full, "cap should be reported as full");
+        assert_eq!(starts.len(), 3, "index must not grow past the cap");
+        assert!(indexed < size, "scan stopped before EOF");
+
+        let store = LargeFileStore::default();
+        let key = path_key(&path);
+        finalize_hydrate_entry(
+            &store,
+            &key,
+            &path,
+            starts,
+            "utf-8".into(),
+            1,
+            size,
+            indexed,
+            false,
+            true,
+        )
+        .unwrap();
+        let g = store.0.lock().unwrap();
+        let entry = g.get(&key).unwrap();
+        assert!(entry.partial, "capped index must be partial");
+        assert_eq!(
+            entry.bytes_indexed, indexed,
+            "must not claim the whole file"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A cached mmap is frozen at its map-time length; if the file is truncated
+    /// outside the app, reading it would SIGBUS/abort. Reads must revalidate and
+    /// fall back to a fresh disk read of the post-truncation content.
+    #[test]
+    fn mmap_revalidated_after_external_truncation() {
+        let dir = std::env::temp_dir().join(format!("mkl-lf-mmap-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("trunc.md");
+        fs::write(&path, b"aaaa\nbbbb\ncccc\n").unwrap();
+
+        let entry = LargeFileEntry {
+            path: path.clone(),
+            mmap: open_mmap(&path),
+            file_line_starts: vec![0, 5, 10],
+            encoding: "utf-8".into(),
+            mtime_ms: 1,
+            size_bytes: 15,
+            bytes_indexed: 15,
+            partial: false,
+            ends_with_newline: true,
+            edits: HashMap::new(),
+            last_used: Instant::now(),
+        };
+        // While current, the mmap is used and reads are correct.
+        assert!(mmap_if_current(&entry).is_some());
+        assert_eq!(read_line_from_disk(&entry, 1).unwrap(), "bbbb");
+
+        // Shorten the file outside the app — the cached map is now stale.
+        // `set_len` cannot run while the section is mapped (Windows reports
+        // ERROR_USER_MAPPED_FILE), so replace the file with a shorter one.
+        let replacement = dir.join("shorter.md");
+        fs::write(&replacement, b"aaaa\nbbbb\n").unwrap();
+        fs::rename(&replacement, &path).expect("replace with shorter file");
+        assert!(mmap_if_current(&entry).is_none(), "stale mmap not detected");
+
+        // Reads must fall through to disk, not the stale map.
+        assert_eq!(read_line_from_disk(&entry, 0).unwrap(), "aaaa");
+        assert_eq!(read_line_from_disk(&entry, 1).unwrap(), "bbbb");
+        assert_eq!(read_line_from_disk(&entry, 2).unwrap(), "");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn test_entry(path: &Path) -> LargeFileEntry {
+        LargeFileEntry {
+            path: path.to_path_buf(),
+            mmap: None,
+            file_line_starts: vec![0],
+            encoding: "utf-8".into(),
+            mtime_ms: 0,
+            size_bytes: 0,
+            bytes_indexed: 0,
+            partial: false,
+            ends_with_newline: false,
+            edits: HashMap::new(),
+            last_used: Instant::now(),
+        }
+    }
+
+    /// Serving a window must revalidate against disk: if the file changed
+    /// outside the app, stale offsets would return wrong text — fail loudly.
+    #[test]
+    fn lines_window_rejects_stale_entry() {
+        let dir = std::env::temp_dir().join(format!("mkl-lf-stale-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("stale.md");
+        fs::write(&path, "a\nb\nc\n").unwrap();
+        let size = fs::metadata(&path).unwrap().len();
+
+        let store = LargeFileStore::default();
+        let key = path_key(&path);
+        {
+            let mut g = store.0.lock().unwrap();
+            let mut entry = test_entry(&path);
+            entry.file_line_starts = vec![0, 2, 4];
+            entry.size_bytes = size + 1; // stale — does not match disk
+            entry.bytes_indexed = size;
+            g.insert(key.clone(), entry);
+        }
+        assert!(
+            large_file_lines_blocking(&store, &path, 1, 3).is_err(),
+            "stale size must be rejected"
+        );
+
+        // Refresh the recorded size/mtime → the window is served normally.
+        {
+            let meta = fs::metadata(&path).unwrap();
+            let mut g = store.0.lock().unwrap();
+            let e = g.get_mut(&key).unwrap();
+            e.size_bytes = meta.len();
+            e.mtime_ms = meta_mtime_ms(&meta);
+        }
+        let lines = large_file_lines_blocking(&store, &path, 1, 3).unwrap();
+        assert_eq!(lines.lines, vec!["a", "b", "c"]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn store_evicts_lru_and_clears_under_root() {
+        let store = LargeFileStore::default();
+        for i in 0..(MAX_STORE_ENTRIES + 3) {
+            let p = PathBuf::from(format!("C:/vault/evict_{i}.md"));
+            let mut g = store.0.lock().unwrap();
+            g.insert(path_key(&p), test_entry(&p));
+            evict_lru(&mut g);
+        }
+        assert_eq!(store.0.lock().unwrap().len(), MAX_STORE_ENTRIES);
+
+        // An entry outside the revoked root must survive the purge.
+        let outside = PathBuf::from("D:/other/keep.md");
+        {
+            let mut g = store.0.lock().unwrap();
+            g.insert(path_key(&outside), test_entry(&outside));
+        }
+        store.clear_under_root(Path::new("C:/vault"));
+        let g = store.0.lock().unwrap();
+        assert!(
+            g.contains_key(&path_key(&outside)),
+            "unrelated entry purged"
+        );
+        assert!(g.keys().all(|k| !k.contains("evict_")), "root entries kept");
     }
 }

@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { queryVault, type QueryHit } from "../lib/vault";
 import { t } from "../lib/i18n";
 import { useLocale } from "../hooks/useLocale";
@@ -16,6 +16,17 @@ export function QueryPanel({ vaultRoot, onOpenFile }: Props) {
   const [error, setError] = useState("");
   const [ran, setRan] = useState(false);
 
+  // Guards against setState after unmount and against a slower earlier query
+  // overwriting a newer one.
+  const mountedRef = useRef(true);
+  const runIdRef = useRef(0);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
+
   const run = async () => {
     if (!vaultRoot) return;
     const q = query.trim();
@@ -25,16 +36,21 @@ export function QueryPanel({ vaultRoot, onOpenFile }: Props) {
       setRan(false);
       return;
     }
+    const myRun = ++runIdRef.current;
+    const stale = () => !mountedRef.current || myRun !== runIdRef.current;
     setLoading(true);
     setError("");
     setRan(true);
     try {
-      setHits(await queryVault(vaultRoot, q));
+      const result = await queryVault(vaultRoot, q);
+      if (stale()) return;
+      setHits(result);
     } catch (err) {
+      if (stale()) return;
       setHits([]);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (!stale()) setLoading(false);
     }
   };
 

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "doc-windows",
-  "description": "Editor (doc-*) windows — least privilege; no global focus/taskbar pinning",
+  "description": "Editor (doc-*) windows — least privilege; no global focus/taskbar pinning. core:webview:allow-create-webview-window is required by the openFilesInNewWindow multi-window feature — do not remove.",
   "windows": ["doc-*"],
   "permissions": [
     "core:default",

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "../i18n";
 import { BUILTIN_PLUGINS } from "./builtin";
 import {
   STYLE_TAG_PREFIX,
@@ -59,9 +60,33 @@ function removeStyleTag(id: string) {
   document.getElementById(id)?.remove();
 }
 
+/**
+ * Decode CSS escape sequences so escape-based bypasses (`u\72l(`, `@im\port`,
+ * `\75 rl(`) cannot smuggle a blocked construct past the literal regexes.
+ * Handles `\` + 1–6 hex digits (+ optional terminating whitespace) and `\c`
+ * character escapes; `\<newline>` is a line continuation and is dropped.
+ */
+function decodeCssEscapes(css: string): string {
+  return css.replace(/\\(?:([0-9a-fA-F]{1,6})[ \t\r\n\f]?|([\s\S]))/g, (_m, hex, chr) => {
+    if (hex) {
+      const code = parseInt(hex, 16);
+      if (code === 0 || code > 0x10ffff) return "\uFFFD";
+      return String.fromCodePoint(code);
+    }
+    return chr;
+  });
+}
+
+/** Class names we are willing to write into `<html class>` from a plugin manifest. */
+export function isSafeBodyClass(className: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(className);
+}
+
 /** Scope untrusted vault/disk CSS to the reader pane; block @import / breakout. */
-export function scopeReaderCss(css: string): string {
-  const cleaned = css
+export function scopeReaderCss(raw: string): string {
+  // Normalise escapes FIRST, then block. The decoded string is also the output
+  // so an escaped `url(` cannot survive into the stylesheet.
+  const cleaned = decodeCssEscapes(raw)
     .replace(/@import\s+[^;]+;/gi, "/* @import blocked */")
     .replace(/@import\s+["'][^"']+["']/gi, "/* @import blocked */")
     .replace(/expression\s*\(/gi, "/* expression blocked */")
@@ -136,6 +161,9 @@ export function createPluginApi(
   return {
     toggleBodyClass(className, force) {
       const root = document.documentElement;
+      // A plugin manifest / command must not write arbitrary class tokens
+      // (e.g. extra classes or attribute-injection) onto <html>.
+      if (!isSafeBodyClass(className)) return root.classList.contains(className);
       const next = force ?? !root.classList.contains(className);
       root.classList.toggle(className, next);
       return next;
@@ -181,7 +209,9 @@ export async function applyEnabledPlugins(
     if (!enabled.has(plugin.id)) {
       removeStyleTag(tagId);
       const bodyClass = plugin.contributes.bodyClass;
-      if (bodyClass) document.documentElement.classList.remove(bodyClass);
+      if (bodyClass && isSafeBodyClass(bodyClass)) {
+        document.documentElement.classList.remove(bodyClass);
+      }
       // Toggle-managed themes (bodyClass null) still need cleanup on disable.
       if (plugin.id === "sepia-reading") {
         document.documentElement.classList.remove("plugin-sepia-reading");
@@ -216,7 +246,7 @@ export async function applyEnabledPlugins(
     const bodyClass = plugin.contributes.bodyClass;
     // Always-on chrome via bodyClass. Toggle themes (sepia / immersive) leave
     // bodyClass null and restore state from activate() or App.
-    if (bodyClass) {
+    if (bodyClass && isSafeBodyClass(bodyClass)) {
       document.documentElement.classList.add(bodyClass);
     }
 
@@ -262,7 +292,7 @@ export function runPluginCommand(
     const cmd = plugin.contributes.commands.find((c) => c.id === commandId);
     if (!cmd) continue;
     if (!enabled.has(plugin.id)) {
-      setStatus(`请先启用插件「${plugin.name}」`);
+      setStatus(t("ailib.pluginEnableFirst", { name: plugin.name }));
       return true;
     }
     const builtin = BUILTIN_PLUGINS.find((b) => b.id === plugin.id);
@@ -271,9 +301,13 @@ export function runPluginCommand(
       return true;
     }
     const bodyClass = plugin.contributes.bodyClass;
-    if (bodyClass) {
+    if (bodyClass && isSafeBodyClass(bodyClass)) {
       const on = api.toggleBodyClass(bodyClass);
-      setStatus(on ? `${plugin.name} 已开启` : `${plugin.name} 已关闭`);
+      setStatus(
+        on
+          ? t("ailib.pluginEnabled", { name: plugin.name })
+          : t("ailib.pluginDisabled", { name: plugin.name }),
+      );
       return true;
     }
   }

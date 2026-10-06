@@ -48,17 +48,28 @@ export function useWindowLifecycle(options: {
         for (const name of event.payload.names ?? []) {
           if (name) names.add(name);
         }
-      }).then(async (fn) => {
-        unlisten = () => {
-          window.clearTimeout(timer);
-          fn();
-        };
-        try {
-          await emit("markelle-quit-probe", { requestId } satisfies QuitProbePayload);
-        } catch {
+      })
+        .then(async (fn) => {
+          unlisten = () => {
+            window.clearTimeout(timer);
+            fn();
+          };
+          // The 220 ms timeout may have settled first — then `finish` ran without
+          // `unlisten`, so release the listener immediately instead of leaking it.
+          if (settled) {
+            unlisten();
+            return;
+          }
+          try {
+            await emit("markelle-quit-probe", { requestId } satisfies QuitProbePayload);
+          } catch {
+            finish();
+          }
+        })
+        .catch(() => {
+          // Registration failed → nothing to release, just settle the probe.
           finish();
-        }
-      });
+        });
     });
 
     return [...names];

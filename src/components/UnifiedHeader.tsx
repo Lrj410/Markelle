@@ -358,12 +358,7 @@ function UnifiedHeaderInner({
       <div className="unified-header-center">
         {tabs.length > 0 ? (
           <>
-          <div
-            ref={stripRef}
-            className="unified-tab-strip"
-            role="tablist"
-            aria-label={t("tabs.label")}
-          >
+          <div ref={stripRef} className="unified-tab-strip">
             {arrowsFit && stripEdges.start && (
               <button
                 type="button"
@@ -384,6 +379,14 @@ function UnifiedHeaderInner({
                 </svg>
               </button>
             )}
+            {/* role="tablist" wraps ONLY the tabs; the scroll arrows are
+                siblings inside the scroll container so the tablist has no
+                non-tab children. Inline flex reproduces the strip's layout. */}
+            <div
+              role="tablist"
+              aria-label={t("tabs.label")}
+              style={{ display: "flex", alignItems: "center", gap: 4, flex: "none" }}
+            >
             {tabs.map((tab, idx) => {
               const active = tab.id === activeId;
               const tabDirty = isDirty(tab);
@@ -437,6 +440,7 @@ function UnifiedHeaderInner({
                 </div>
               );
             })}
+            </div>
             {arrowsFit && stripEdges.end && (
               <button
                 type="button"
@@ -547,7 +551,7 @@ function UnifiedHeaderInner({
         className="unified-drag-spacer"
         data-tauri-drag-region
         onDoubleClick={toggleMax}
-        title="Double-click to toggle maximize"
+        title={t("header.dragHint")}
       />
 
       {/* --- Right: Quick Actions, Toolbars & Window Controls --- */}
@@ -559,7 +563,7 @@ function UnifiedHeaderInner({
             className="unified-cmd-pill"
             onClick={onOpenCommandPalette}
             title="Ctrl+K / ⌘K"
-           
+            aria-label={t("cmd.label")}
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
               <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z" />
@@ -651,7 +655,7 @@ function UnifiedHeaderInner({
                 type="button"
                 className={clsx("unified-text-btn", "unified-ai-btn", { active: aiOpen })}
                 onClick={onToggleAi}
-                title="本地 AI 助手 (Alt+A)"
+                title={t("ai.toolbarTitle")}
                 aria-pressed={aiOpen}
               >
                 <svg width="13" height="13" viewBox="0 0 18 18" fill="none" aria-hidden>
@@ -723,8 +727,8 @@ function UnifiedHeaderInner({
                 className={clsx("unified-icon-btn", { active: moreOpen })}
                 onClick={() => setMoreOpen((v) => !v)}
                 title={t("toolbar.more")}
+                aria-label={t("toolbar.more")}
                 aria-expanded={moreOpen}
-               
               >
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                   <path d="M8 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM1.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM14.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />

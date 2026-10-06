@@ -71,13 +71,13 @@ export function buildSourceHighlightStyle(dark: boolean): HighlightStyle {
       { tag: tags.strong, color: "#f6f1e8", fontWeight: "700" },
       { tag: tags.emphasis, color: "#c9bba6", fontStyle: "italic" },
       { tag: tags.strikethrough, color: "#7a6d5b", textDecoration: "line-through" },
-      { tag: [tags.link, tags.url], color: "#e88a6a" },
-      { tag: tags.monospace, color: "#d9a05b", fontFamily: MONO_STACK },
+      { tag: [tags.link, tags.url], color: "var(--accent-text, #e88a6a)" },
+      { tag: tags.monospace, color: "var(--warning, #d9a05b)", fontFamily: MONO_STACK },
       { tag: tags.quote, color: "#b5a793", fontStyle: "italic" },
       { tag: [tags.meta, tags.processingInstruction, tags.comment], color: "#8b7c68" },
       { tag: [tags.keyword, tags.operator, tags.atom], color: "#cfc3ad" },
-      { tag: [tags.string, tags.special(tags.string)], color: "#9cb48a" },
-      { tag: tags.labelName, color: "#d9a05b" },
+      { tag: [tags.string, tags.special(tags.string)], color: "var(--success, #7fa86f)" },
+      { tag: tags.labelName, color: "var(--warning, #d9a05b)" },
       { tag: tags.contentSeparator, color: "#4a4032" },
       { tag: tags.list, color: "#a4967f" },
       { tag: tags.invalid, color: "#e4756b" },
@@ -91,13 +91,16 @@ export function buildSourceHighlightStyle(dark: boolean): HighlightStyle {
     { tag: tags.strong, color: "#201b15", fontWeight: "700" },
     { tag: tags.emphasis, color: "#5a4f40", fontStyle: "italic" },
     { tag: tags.strikethrough, color: "#9a8b77", textDecoration: "line-through" },
-    { tag: [tags.link, tags.url], color: "#a63d24" },
-    { tag: tags.monospace, color: "#8a6118", fontFamily: MONO_STACK },
+    // Link accent bridges to the design-token accent (#ab3d24), fixing the
+    // long-standing #a63d24 typo drift.
+    { tag: [tags.link, tags.url], color: "var(--accent, #ab3d24)" },
+    { tag: tags.monospace, color: "var(--warning, #855c17)", fontFamily: MONO_STACK },
     { tag: tags.quote, color: "#6b5f50", fontStyle: "italic" },
     { tag: [tags.meta, tags.processingInstruction, tags.comment], color: "#9a8b77" },
     { tag: [tags.keyword, tags.operator, tags.atom], color: "#4a3f31" },
-    { tag: [tags.string, tags.special(tags.string)], color: "#5f7a4a" },
-    { tag: tags.labelName, color: "#8a6118" },
+    // String / number colours track the design-token semantic pair.
+    { tag: [tags.string, tags.special(tags.string)], color: "var(--success, #477040)" },
+    { tag: tags.labelName, color: "var(--warning, #855c17)" },
     { tag: tags.contentSeparator, color: "#cfc5b2" },
     { tag: tags.list, color: "#7c6f5c" },
     { tag: tags.invalid, color: "#9a2b22" },
@@ -108,18 +111,28 @@ export function buildSourceHighlightStyle(dark: boolean): HighlightStyle {
 export function buildSourceEditorTheme(dark: boolean, gutterCh = 2.4): Extension {
   // 墨纸版面：暖炭纸面，不用冷灰也不用纯黑 IDE 底。
   // Body size comes from --source-font-size so Ctrl+wheel never rebuilds the theme.
-  const ink = dark ? "#f2ebdf" : "#201b15";
-  const inkSoft = dark ? "#b5a793" : "#6b5f50";
-  const paper = dark ? "#1e1a14" : "#fdfbf5";
-  const gutterBg = dark ? "#1a1611" : "#f0ebdf";
-  const line = dark ? "#322a1f" : "#ded5c4";
-  const inset = dark ? "#262018" : "#f0ebdf";
+  //
+  // Colours bridge to design-tokens.css via `var(--token, fallback)`. CodeMirror
+  // emits these strings verbatim into its injected stylesheet, so the root
+  // custom properties resolve at paint time and the editor tracks the live
+  // palette automatically (the file already relies on this for --paper-elevated
+  // / --line). This is preferred over getComputedStyle() here: that would read
+  // the *previous* theme on first paint (the `data-theme` attribute is applied
+  // in an effect, after render) and returns "" under the node test env. The
+  // fallbacks keep the editor correct if a token is ever missing and encode the
+  // light/dark selection.
+  const ink = `var(--text-primary, ${dark ? "#f2ebdf" : "#201b15"})`;
+  const inkSoft = `var(--text-secondary, ${dark ? "#b5a793" : "#6b5f50"})`;
+  const paper = `var(--page, ${dark ? "#1e1a14" : "#fdfbf5"})`;
+  const gutterBg = `var(--bg-subtle, ${dark ? "#1a1611" : "#f0ebdf"})`;
+  const line = `var(--line, ${dark ? "#322a1f" : "#ded5c4"})`;
+  const inset = `var(--surface-inset, ${dark ? "#262018" : "#f0ebdf"})`;
   const active = dark ? "rgba(243, 235, 221, 0.05)" : "rgba(38, 31, 23, 0.035)";
   const selection = dark ? "rgba(224, 112, 79, 0.28)" : "rgba(180, 69, 43, 0.16)";
   const match = dark ? "rgba(217, 160, 91, 0.24)" : "rgba(150, 104, 29, 0.16)";
   const gutterFg = dark ? "#7c6f5c" : "#a2947f";
-  const caret = dark ? "#f2ebdf" : "#201b15";
-  const accent = dark ? "#e88a6a" : "#9c3a22";
+  const caret = ink;
+  const accent = `var(--accent-text, ${dark ? "#e88a6a" : "#9c3a22"})`;
 
   return EditorView.theme(
     {

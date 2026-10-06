@@ -1,3 +1,5 @@
+import { t } from "./i18n";
+
 let initializedTheme: "dark" | "default" | null = null;
 
 export async function renderMermaidBlocks(
@@ -32,7 +34,7 @@ export async function renderMermaidBlocks(
       // Prefer textContent mutation over outerHTML — avoids removeChild races
       // when React later replaces the article via dangerouslySetInnerHTML.
       node.className = "mermaid-error";
-      node.textContent = `Mermaid 渲染失败：${message}`;
+      node.textContent = t("md.mermaidRenderFailed", { error: message });
       node.setAttribute("data-processed", "true");
     }
   }

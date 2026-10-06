@@ -5,6 +5,8 @@
  * - Re-encode large bitmaps as JPEG to keep paste/import snappy
  */
 
+import { t } from "./i18n";
+
 export const DEFAULT_MAX_EDGE = 2048;
 export const DEFAULT_PASS_THROUGH_BYTES = 2 * 1024 * 1024;
 export const DEFAULT_JPEG_QUALITY = 0.85;
@@ -49,7 +51,7 @@ async function convertHeicToJpeg(blob: Blob): Promise<Blob> {
 function canvasToJpegBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
-      (b) => (b ? resolve(b) : reject(new Error("图片编码失败"))),
+      (b) => (b ? resolve(b) : reject(new Error(t("md.imgEncodeFailed")))),
       "image/jpeg",
       quality,
     );
@@ -67,7 +69,7 @@ function loadHtmlImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("图片解码失败"));
+    img.onerror = () => reject(new Error(t("md.imgDecodeFailed")));
     img.src = url;
   });
 }

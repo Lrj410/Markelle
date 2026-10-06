@@ -10,7 +10,6 @@ interface Props {
   dock: DockLayout;
   graphOpen: boolean;
   vaultOpen: boolean;
-  hasFile?: boolean;
   pluginsOpen: boolean;
   scheme: ColorScheme;
   dark: boolean;
@@ -176,7 +175,6 @@ export function ActivityBar({
   dock,
   graphOpen,
   vaultOpen,
-  hasFile: _hasFile = false,
   pluginsOpen,
   scheme,
   dark,
@@ -315,7 +313,7 @@ export function ActivityBar({
           themeLabel,
           dark ? ICONS["theme-sun"] : ICONS["theme-moon"],
           {
-            title: scheme === "system" ? `${themeLabel} (system)` : themeLabel,
+            title: scheme === "system" ? `${themeLabel}${t("panel.themeSystem")}` : themeLabel,
             onClick: onToggleTheme,
           },
         )}

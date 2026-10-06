@@ -23,7 +23,6 @@ interface Props {
   value: string;
   onChange: (value: string) => void;
   dark: boolean;
-  fontSize: number;
   vaultFiles?: VaultFile[];
   wordWrap?: boolean;
   lineNumbers?: boolean;
@@ -43,6 +42,8 @@ interface Props {
     | Promise<string[] | false | void | boolean>;
   /** Pick image files; returns markdown snippets for cursor insertion. */
   onInsertImage?: () => Promise<string[] | null | void> | string[] | null | void;
+  /** Surface image-insertion / paste failures to the shell status bar. */
+  onStatus?: (msg: string) => void;
   /** Expose live CodeMirror view (for App-level drop-at-cursor). */
   onViewReady?: (view: EditorView | null) => void;
   /** Compact chrome for split panes. */
@@ -68,7 +69,6 @@ export function SourceWorkbench({
   value,
   onChange,
   dark,
-  fontSize,
   vaultFiles,
   wordWrap,
   lineNumbers,
@@ -80,6 +80,7 @@ export function SourceWorkbench({
   findRequest,
   onPasteFiles,
   onInsertImage,
+  onStatus,
   onViewReady,
   compact = false,
   header,
@@ -191,17 +192,25 @@ export function SourceWorkbench({
               disabled={readOnly || !onInsertImage}
               onClick={() => {
                 if (readOnly || !onInsertImage) return;
-                void Promise.resolve(onInsertImage()).then((links) => {
-                  if (!Array.isArray(links) || !links.length || !view) return;
-                  const text = links.join("\n");
-                  const { from, to } = view.state.selection.main;
-                  view.dispatch({
-                    changes: { from, to, insert: text },
-                    selection: { anchor: from + text.length },
-                    scrollIntoView: true,
+                void Promise.resolve(onInsertImage())
+                  .then((links) => {
+                    if (!Array.isArray(links) || !links.length || !view) return;
+                    const text = links.join("\n");
+                    const { from, to } = view.state.selection.main;
+                    view.dispatch({
+                      changes: { from, to, insert: text },
+                      selection: { anchor: from + text.length },
+                      scrollIntoView: true,
+                    });
+                    view.focus();
+                  })
+                  .catch((err: unknown) => {
+                    onStatus?.(
+                      `${t("source.insertImage")}: ${
+                        err instanceof Error ? err.message : String(err)
+                      }`,
+                    );
                   });
-                  view.focus();
-                });
               }}
             >
               {t("source.imageLabel")}
@@ -261,7 +270,6 @@ export function SourceWorkbench({
         value={value}
         onChange={onChange}
         dark={dark}
-        fontSize={fontSize}
         vaultFiles={vaultFiles}
         wordWrap={wordWrap}
         lineNumbers={lineNumbers}

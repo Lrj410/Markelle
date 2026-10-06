@@ -40,7 +40,6 @@ interface Props {
   value: string;
   onChange: (value: string) => void;
   dark: boolean;
-  fontSize: number;
   vaultFiles?: VaultFile[];
   wordWrap?: boolean;
   lineNumbers?: boolean;
@@ -95,7 +94,6 @@ function SourceEditorInner({
   value,
   onChange,
   dark,
-  fontSize: _fontSize,
   vaultFiles = [],
   wordWrap = true,
   lineNumbers = true,
@@ -110,7 +108,6 @@ function SourceEditorInner({
   onCursorInfo,
   virtualDoc,
 }: Props) {
-  void _fontSize; // size via --source-font-size (Ctrl+wheel / settings)
   const locale = useLocale();
   const paneRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -127,9 +124,14 @@ function SourceEditorInner({
 
   const isLargeDoc = Boolean(virtualDoc) || value.length > 2_000_000;
   const isMegaDoc = Boolean(virtualDoc) || value.length > 20_000_000;
+  // Read the primitives once: callers pass a fresh `virtualDoc={{...}}` object
+  // literal each render, so depending on the object identity would rebuild the
+  // CodeMirror extension set (and reset the virtual-doc chunk cache) every time.
+  const virtualDocPath = virtualDoc?.path;
+  const virtualDocTotalLines = virtualDoc?.totalLines;
   const estimatedDigits = useMemo(() => {
-    if (virtualDoc && virtualDoc.totalLines > 0) {
-      return Math.max(3, String(virtualDoc.totalLines).length);
+    if (virtualDocTotalLines && virtualDocTotalLines > 0) {
+      return Math.max(3, String(virtualDocTotalLines).length);
     }
     let lines = 1;
     for (let i = 0; i < Math.min(value.length, 50000); i++) {
@@ -137,14 +139,14 @@ function SourceEditorInner({
     }
     const total = Math.max(lines, Math.floor(value.length / 45));
     return Math.max(3, String(total).length);
-  }, [value, virtualDoc]);
+  }, [value, virtualDocTotalLines]);
 
   const docValue = useMemo(() => {
-    if (virtualDoc && virtualDoc.totalLines > 0) {
-      return buildVirtualInitialText(value, virtualDoc.totalLines);
+    if (virtualDocTotalLines && virtualDocTotalLines > 0) {
+      return buildVirtualInitialText(value, virtualDocTotalLines);
     }
     return value;
-  }, [value, virtualDoc]);
+  }, [value, virtualDocTotalLines]);
 
   const extensions = useMemo(() => {
     void locale;
@@ -237,10 +239,18 @@ function SourceEditorInner({
           }
           if (result && typeof (result as Promise<unknown>).then === "function") {
             event.preventDefault();
-            void (result as Promise<string[] | false | void | boolean>).then((r) => {
-              if (Array.isArray(r) && r.length) insertLinks(r);
-              else restoreTextOnFailure();
-            });
+            void (result as Promise<string[] | false | void | boolean>)
+              .then((r) => {
+                // The editor may have been destroyed / reconfigured while the
+                // async handler ran; never dispatch into a dead view.
+                if (viewRef.current !== view) return;
+                if (Array.isArray(r) && r.length) insertLinks(r);
+                else restoreTextOnFailure();
+              })
+              .catch(() => {
+                if (viewRef.current !== view) return;
+                restoreTextOnFailure();
+              });
             return true;
           }
           return false;
@@ -259,8 +269,8 @@ function SourceEditorInner({
         }),
       );
     }
-    if (virtualDoc && virtualDoc.totalLines > 0) {
-      exts.push(createVirtualDocExtension(virtualDoc.path, virtualDoc.totalLines));
+    if (virtualDocPath && virtualDocTotalLines && virtualDocTotalLines > 0) {
+      exts.push(createVirtualDocExtension(virtualDocPath, virtualDocTotalLines));
     }
     exts.push(
       buildSourceEditorTheme(dark, estimatedDigits + 1),
@@ -268,7 +278,7 @@ function SourceEditorInner({
     );
     exts.push(keymap.of([{ key: "Mod-f", run: openSearchPanel }]));
     return exts;
-  }, [vaultFiles, wordWrap, dark, readOnly, vimMode, spellcheck, locale, isLargeDoc, isMegaDoc, estimatedDigits, virtualDoc]);
+  }, [vaultFiles, wordWrap, dark, readOnly, vimMode, spellcheck, locale, isLargeDoc, isMegaDoc, estimatedDigits, virtualDocPath, virtualDocTotalLines]);
 
   useEffect(() => {
     const pane = paneRef.current;
@@ -443,7 +453,7 @@ function SourceEditorInner({
             ? [
                 {
                   id: "ai-polish-sel",
-                  label: "✨ 润色所选文字 (AI Polish)",
+                  label: t("ai.menuPolish"),
                   onSelect: () => {
                     window.dispatchEvent(
                       new CustomEvent("markelle:ai-action", { detail: { action: "polish" } }),
@@ -452,7 +462,7 @@ function SourceEditorInner({
                 },
                 {
                   id: "ai-translate-sel",
-                  label: "✨ 翻译所选文字 (AI Translate)",
+                  label: t("ai.menuTranslate"),
                   onSelect: () => {
                     window.dispatchEvent(
                       new CustomEvent("markelle:ai-action", { detail: { action: "translate" } }),
@@ -461,7 +471,7 @@ function SourceEditorInner({
                 },
                 {
                   id: "ai-proofread-sel",
-                  label: "✨ 纠错校对所选 (AI Proofread)",
+                  label: t("ai.menuProofread"),
                   onSelect: () => {
                     window.dispatchEvent(
                       new CustomEvent("markelle:ai-action", { detail: { action: "proofread" } }),
@@ -472,7 +482,7 @@ function SourceEditorInner({
             : []),
           {
             id: "ai-panel",
-            label: "✨ 打开 AI 助手 (Alt+A)",
+            label: t("ai.menuOpen"),
             onSelect: () => {
               window.dispatchEvent(new CustomEvent("markelle:open-ai"));
             },

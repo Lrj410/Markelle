@@ -16,8 +16,6 @@ interface Props {
   onRunCommand: (commandId: string) => void;
   pluginSettings?: PluginSettingsStore;
   onPluginSetting?: (pluginId: string, key: string, value: unknown) => void;
-  /** dock = embedded panel body; modal = overlay dialog */
-  variant?: "modal" | "dock";
 }
 
 export function PluginPanelBody({
@@ -27,7 +25,7 @@ export function PluginPanelBody({
   onRunCommand,
   pluginSettings = {},
   onPluginSetting,
-}: Omit<Props, "open" | "onClose" | "variant">) {
+}: Omit<Props, "open" | "onClose">) {
   useLocale();
   const [dir, setDir] = useState("");
 
@@ -152,32 +150,18 @@ export function PluginPanel({
   onRunCommand,
   pluginSettings,
   onPluginSetting,
-  variant = "modal",
 }: Props) {
   useLocale();
   const panelRef = useRef<HTMLDivElement>(null);
 
   useModalFocusTrap({
-    active: open && variant === "modal",
+    active: open,
     containerRef: panelRef,
     onEscape: onClose,
     initialFocusSelector: ".btn",
   });
 
   if (!open) return null;
-
-  if (variant === "dock") {
-    return (
-      <PluginPanelBody
-        plugins={plugins}
-        enabledIds={enabledIds}
-        onToggle={onToggle}
-        onRunCommand={onRunCommand}
-        pluginSettings={pluginSettings}
-        onPluginSetting={onPluginSetting}
-      />
-    );
-  }
 
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={t("plugins.aria")}>

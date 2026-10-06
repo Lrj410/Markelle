@@ -51,6 +51,14 @@ export async function writeMarkdownFile(
   return invoke<FileStat>("write_markdown_file", { path, content });
 }
 
+/** Append-only write; never reads or rewrites existing content. Returns the new size. */
+export async function appendMarkdownFile(
+  path: string,
+  content: string,
+): Promise<number> {
+  return invoke<number>("append_markdown_file", { path, content });
+}
+
 export async function statMarkdownFile(path: string): Promise<FileStat> {
   return invoke<FileStat>("stat_markdown_file", { path });
 }

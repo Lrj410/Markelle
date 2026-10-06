@@ -11,22 +11,11 @@
   --space-6: 32px;
   /* Motion tokens */
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
-  --ease-in: cubic-bezier(0.4, 0, 1, 1);
-  --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
-  --ease-spring: cubic-bezier(0.2, 0, 0, 1);
-  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
   --dur-instant: 80ms;
   --dur-fast: 120ms;
   --dur-med: 200ms;
-  --dur-exit: 140ms;
-  --dur-layout: 240ms;
   --dur-enter: 220ms;
-  --stagger: 30ms;
-  --z-dock-ghost: 20;
-  --z-title: 30;
-  --z-overlay: 50;
-  --z-context: 400;
-  --z-lightbox: 12000;
+  /* Stacking order (--z-*) now lives in design-tokens.css as a single scale. */
 }
 
 .app-shell {
@@ -47,7 +36,9 @@
   grid-template-columns: var(--activity-w) minmax(0, 1fr);
   min-height: 0;
   background: var(--bg-app);
-  transition: grid-template-columns var(--transition-normal);
+  /* grid-template-columns reflows the whole shell, so the toggle stays brief
+     (was --transition-normal). Covered by the prefers-reduced-motion block. */
+  transition: grid-template-columns var(--transition-fast);
 }
 
 .app-body.activity-expanded {
@@ -89,9 +80,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 0 0 10px;
+  padding: 0 0 0 var(--space-2);
   user-select: none;
-  z-index: 100;
+  z-index: var(--z-header);
   position: relative;
   gap: 8px;
 }
@@ -108,19 +99,19 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 3px 6px;
+  padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
 }
 
 .unified-logo {
   width: 16px;
   height: 16px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .unified-brand-name {
   font-weight: 650;
-  font-size: 13px;
+  font-size: var(--text-base);
   letter-spacing: -0.01em;
   color: var(--text-primary);
 }
@@ -129,7 +120,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   color: var(--text-secondary);
   background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
@@ -139,10 +130,11 @@
 }
 
 .vault-pill-icon {
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 
 .vault-pill-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -158,7 +150,11 @@
   color: var(--text-secondary);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    opacity var(--transition-fast);
   position: relative;
 }
 
@@ -196,7 +192,7 @@
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   /* Must be able to shrink below its content, otherwise a long tab strip
      overflows the header and pushes the right-side controls off-screen. */
   min-width: 0;
@@ -260,7 +256,10 @@
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .unified-tab-list-btn:hover,
@@ -272,7 +271,7 @@
 
 .tab-list-popover {
   width: 288px;
-  padding: 8px;
+  padding: var(--space-2);
   gap: 4px;
 }
 
@@ -283,7 +282,7 @@
   margin-bottom: 4px;
   padding: 2px 6px 6px;
   border-bottom: 1px solid var(--border-subtle);
-  font-size: 11px;
+  font-size: var(--text-xs);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-tertiary);
@@ -323,11 +322,11 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 5px 4px 5px 6px;
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2);
   border: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -359,7 +358,7 @@
 
 .tab-list-dirty {
   flex: none;
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: var(--warning);
 }
 
@@ -371,14 +370,17 @@
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1;
   cursor: pointer;
   opacity: 0;
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast),
+    opacity var(--transition-fast);
 }
 
 .tab-list-item:hover .tab-list-close,
@@ -390,6 +392,17 @@
   background: var(--bg-surface-active);
   color: var(--text-primary);
   opacity: 1;
+}
+
+/* Keyboard focus must reveal the close button — WCAG 2.4.7 / 2.4.11. */
+.tab-list-item:focus-within .tab-list-close {
+  opacity: 0.75;
+}
+
+.tab-list-close:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
 }
 
 .unified-drag-spacer {
@@ -405,12 +418,12 @@
   align-items: center;
   gap: 7px;
   height: 28px;
-  padding: 0 8px 0 10px;
+  padding: 0 var(--space-2) 0 var(--space-2);
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 500;
   /* Keep every tab at its own width and let the strip scroll instead of
      squeezing all tabs down to unreadable 80px slivers. */
@@ -470,16 +483,19 @@
   place-items: center;
   width: 16px;
   height: 16px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   border: 0;
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1;
   padding: 0;
   cursor: pointer;
   opacity: 0;
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast),
+    opacity var(--transition-fast);
 }
 
 .unified-tab:hover .unified-tab-close,
@@ -493,8 +509,19 @@
   opacity: 1;
 }
 
+/* Keyboard focus must reveal the close button — WCAG 2.4.7 / 2.4.11. */
+.unified-tab:focus-within .unified-tab-close {
+  opacity: 0.75;
+}
+
+.unified-tab-close:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
 .unified-title-hint {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-tertiary);
   display: flex;
   align-items: center;
@@ -517,17 +544,20 @@
   align-items: center;
   gap: 6px;
   height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
   background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--text-xs);
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
   -webkit-app-region: no-drag;
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .unified-cmd-pill:hover {
@@ -537,11 +567,11 @@
 }
 
 .cmd-pill-kbd {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   font-family: var(--font-mono);
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   padding: 1px 4px;
   color: var(--text-tertiary);
 }
@@ -552,7 +582,7 @@
   }
 }
 
-@media (max-width: 980px) {
+@media (max-width: 900px) {
   .cmd-pill-label {
     display: none;
   }
@@ -581,14 +611,17 @@
   border: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 500;
   padding: 2px 7px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .unified-seg .seg-btn:hover {
@@ -607,12 +640,12 @@
   align-items: center;
   gap: 5px;
   height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
   background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -639,12 +672,12 @@
   align-items: center;
   gap: 5px;
   height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
   background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
   color: var(--text-tertiary);
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   font-weight: 500;
   cursor: default;
   white-space: nowrap;
@@ -672,7 +705,7 @@
 }
 
 .unified-badge-loading {
-  font-size: 10.5px;
+  font-size: var(--text-2xs);
   color: var(--accent-text);
   background: var(--accent-subtle);
   padding: 2px 6px;
@@ -694,8 +727,8 @@
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-popover);
-  padding: 10px;
-  z-index: 1000;
+  padding: var(--space-2);
+  z-index: var(--z-dropdown);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -711,7 +744,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 
@@ -724,7 +757,7 @@
 .popover-val {
   min-width: 36px;
   text-align: center;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
@@ -745,14 +778,16 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 5px 8px;
+  padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
   border: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-sm);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .popover-action-btn:hover {
@@ -761,10 +796,10 @@
 }
 
 .popover-tag {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   background: var(--bg-subtle);
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   color: var(--text-tertiary);
 }
 
@@ -787,7 +822,9 @@
   color: var(--text-secondary);
   cursor: pointer;
   -webkit-app-region: no-drag;
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .unified-win-controls .win-btn:hover {
@@ -807,15 +844,17 @@
   justify-content: space-between;
   border-right: 1px solid var(--border-subtle);
   background: var(--bg-subtle);
-  padding: 8px 6px 12px;
+  padding: var(--space-2) var(--space-2) var(--space-3);
   width: var(--activity-w);
   flex: 0 0 auto;
-  transition: width var(--transition-normal);
+  /* width is not composited (full reflow per frame); shortened (was
+     --transition-normal) and covered by the prefers-reduced-motion block. */
+  transition: width var(--transition-fast);
 }
 
 .activity-bar.expanded {
   width: var(--activity-w-expanded);
-  padding: 8px 8px 12px;
+  padding: var(--space-2) var(--space-2) var(--space-3);
 }
 
 .activity-group {
@@ -842,9 +881,12 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .activity-bar:not(.expanded) .activity-btn {
@@ -855,8 +897,8 @@
 }
 
 .activity-bar.expanded .activity-btn {
-  padding-left: 12px;
-  padding-right: 8px;
+  padding-left: var(--space-3);
+  padding-right: var(--space-2);
 }
 
 .activity-btn-icon {
@@ -871,7 +913,7 @@
   flex: 1;
   min-width: 0;
   text-align: left;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -923,17 +965,17 @@
   align-items: center;
   justify-content: center;
   gap: 12px;
-  padding: 8px 14px;
+  padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--paper-elevated) 88%, var(--paper));
   flex-shrink: 0;
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: var(--z-sticky);
 }
 
 .preview-page-meta {
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 500;
   color: var(--ink-soft);
   min-width: 7em;
@@ -948,7 +990,7 @@
 }
 
 .page-jump-label {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--ink-soft);
 }
 
@@ -956,11 +998,11 @@
   width: 52px;
   height: 26px;
   padding: 2px 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   border: 1px solid var(--line);
   background: var(--paper);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: center;
   outline: none;
   transition: border-color 0.15s ease;
@@ -970,19 +1012,25 @@
   border-color: var(--accent);
 }
 
+/* The 1px border alone is not a sufficient focus indicator — WCAG 1.4.11 / 2.4.11. */
+.page-jump-input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .page-switch-btn {
   margin-left: auto;
-  font-size: 12px;
-  padding: 4px 10px;
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-2);
 }
 
 .large-doc-notice {
   margin: 12px 0 18px;
-  padding: 10px 16px;
-  border-radius: 8px;
-  background-color: var(--paper-elevated, rgba(255, 255, 255, 0.05));
-  border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
-  font-size: 13px;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-lg);
+  background-color: var(--paper-elevated);
+  border: 1px solid var(--line);
+  font-size: var(--text-base);
   color: var(--ink, inherit);
   display: flex;
   align-items: center;
@@ -995,7 +1043,7 @@
 .large-doc-hydrating-badge {
   color: var(--accent);
   margin-left: 6px;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 /* —— Dock —— */
@@ -1051,12 +1099,12 @@
     CSS floor mirrors MIN_RIGHT_SIZE (270px) — all tabs + close button + calendar must stay readable — but
     scales with the viewport so a narrow window can never overflow.
   */
-  min-width: min(270px, 40vw);
+  min-width: min(var(--dock-right-min), 40vw);
 }
 
 @media (max-width: 900px) {
   .dock-right {
-    min-width: 0 !important;
+    min-width: 0;
   }
 }
 
@@ -1119,7 +1167,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 2px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   height: 35px;
   box-sizing: border-box;
   flex: none;
@@ -1153,13 +1201,15 @@
   border: none;
   background: transparent;
   color: var(--text-tertiary);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   line-height: 1;
   margin: 0;
   flex-shrink: 0;
   align-self: center;
-  transition: all 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .dock-tab-close:hover {
@@ -1171,11 +1221,11 @@
   border: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   font-weight: 500;
   padding: 0 5.5px;
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  cursor: grab;
+  cursor: pointer;
   white-space: nowrap;
   flex: 0 0 auto;
   height: 100%;
@@ -1212,9 +1262,9 @@
   right: 4px;
   bottom: 0;
   height: 2px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--ink);
-  animation: tab-underline-in var(--dur-fast) var(--ease-emphasized) both;
+  animation: tab-underline-in var(--dur-fast) var(--ease-out) both;
 }
 
 @keyframes tab-underline-in {
@@ -1343,10 +1393,10 @@
   display: grid;
   place-content: center;
   gap: 12px;
-  padding: 24px;
+  padding: var(--space-5);
   text-align: center;
   color: var(--ink-soft);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .dock-fill,
@@ -1364,7 +1414,7 @@
 .plugin-panel-body {
   height: 100%;
   overflow: auto;
-  padding: 12px 14px 18px;
+  padding: var(--space-3) var(--space-4) var(--space-4);
 }
 
 .statusbar-right {
@@ -1398,6 +1448,7 @@
   .dock-tab.active::after,
   .welcome-hero,
   .ui-select-menu,
+  .unified-dropdown-popover,
   .graph-tip {
     transition: none !important;
     animation: none !important;
@@ -1430,9 +1481,15 @@
   position: absolute;
   inset: 0;
   border: 0;
+  /*
+    Was a full-viewport `backdrop-filter: blur(16px)`. WebView2 recomputed that
+    live backdrop every frame while the palette's fade-in ran (16px blur over
+    the whole window is the expensive case, not a small panel). The opaque
+    --bg-modal-overlay scrim plus the panel's shadow-popover separation reads
+    the same and costs nothing per frame — matching the removals documented
+    for the graph HUD / large areas elsewhere in this file.
+  */
   background: var(--bg-modal-overlay);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
 }
 
 .cmdk-panel {
@@ -1446,15 +1503,15 @@
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-popover), 0 0 32px rgba(0, 0, 0, 0.4);
   overflow: hidden;
-  animation: modal-scale-in var(--dur-enter) var(--ease-spring) both;
+  animation: modal-scale-in var(--dur-enter) var(--ease-out) both;
 }
 
 .cmdk-input {
   border: 0;
   border-bottom: 1px solid var(--border-subtle);
   background: transparent;
-  padding: 14px 18px;
-  font-size: 15px;
+  padding: var(--space-4);
+  font-size: var(--text-md);
   font-weight: 500;
   outline: none;
   color: var(--text-primary);
@@ -1467,21 +1524,23 @@
 
 .cmdk-input:focus-visible {
   border-bottom-color: var(--border-focus);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .cmdk-list {
   list-style: none;
   margin: 0;
-  padding: 6px;
+  padding: var(--space-2);
   overflow: auto;
   flex: 1;
   min-height: 0;
 }
 
 .cmdk-empty {
-  padding: 28px 12px;
+  padding: var(--space-6) var(--space-3);
   color: var(--text-tertiary);
-  font-size: 13px;
+  font-size: var(--text-base);
   text-align: center;
 }
 
@@ -1490,7 +1549,7 @@
   border: 1px solid transparent;
   background: transparent;
   text-align: left;
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
   margin: 1px 0;
   border-radius: var(--radius-md);
   display: flex;
@@ -1499,7 +1558,10 @@
   gap: 12px;
   color: var(--text-primary);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .cmdk-item:hover,
@@ -1514,13 +1576,13 @@
   flex-direction: column;
   gap: 2px;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 500;
 }
 
 .cmdk-label em {
   font-style: normal;
-  font-size: 10.5px;
+  font-size: var(--text-2xs);
   letter-spacing: 0.03em;
   text-transform: uppercase;
   color: var(--text-tertiary);
@@ -1534,7 +1596,7 @@
 
 .cmdk-item kbd {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-tertiary);
   flex: none;
   max-width: 40%;
@@ -1552,10 +1614,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 16px;
+  padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--border-subtle);
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--text-xs);
   background: var(--bg-subtle);
 }
 
@@ -1713,14 +1775,14 @@ html.immersive .immersive-exit {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--paper-elevated) 92%, transparent);
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-family: var(--font-ui);
-  box-shadow: var(--shadow-soft);
+  box-shadow: var(--shadow);
   opacity: 0;
   pointer-events: none;
   transition:
@@ -1739,9 +1801,9 @@ html.immersive .immersive-exit:focus-visible {
 
 html.immersive .immersive-exit kbd {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   border: 1px solid var(--line);
   background: var(--paper);
 }
@@ -1754,15 +1816,15 @@ html.immersive .immersive-dirty {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px 8px 14px;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
   border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--line));
   border-radius: var(--radius-full);
   background: var(--paper-elevated);
   color: var(--warning);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 600;
   font-family: var(--font-ui);
-  box-shadow: var(--shadow-soft);
+  box-shadow: var(--shadow);
 }
 
 html.immersive .immersive-dirty .btn {
@@ -1770,17 +1832,17 @@ html.immersive .immersive-dirty .btn {
   align-items: center;
   gap: 6px;
   min-height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
 }
 
 html.immersive .immersive-dirty kbd {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   font-weight: 500;
   padding: 1px 5px;
-  border-radius: 4px;
-  border: 1px solid color-mix(in srgb, #fff 25%, transparent);
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-subtle);
   opacity: 0.85;
 }
 

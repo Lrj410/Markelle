@@ -1,5 +1,7 @@
 import type MarkdownIt from "markdown-it";
 
+import { t } from "./i18n";
+
 export interface ParsedWikiLink {
   embed: boolean;
   target: string;
@@ -220,7 +222,7 @@ export function markdownItWikilink(md: MarkdownIt): void {
       const kind = isAudio ? "audio" : "video";
       return `<span class="wiki-embed wiki-embed-media" data-kind="${kind}" data-target="${target}" data-heading="${heading}" data-label="${label}"${sizeAttr}></span>`;
     }
-    return `<div class="wiki-embed wiki-embed-note" data-target="${target}" data-heading="${heading}" role="link" tabindex="0"><span class="wiki-embed-label">${label}</span><span class="wiki-embed-hint">嵌入 · 点击打开</span></div>`;
+    return `<div class="wiki-embed wiki-embed-note" data-target="${target}" data-heading="${heading}" role="link" tabindex="0"><span class="wiki-embed-label">${label}</span><span class="wiki-embed-hint">${t("md.embedHint")}</span></div>`;
   };
 }
 

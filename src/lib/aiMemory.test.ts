@@ -5,8 +5,29 @@ import {
   getCogniStackSessionState,
   saveCogniStackSessionState,
   clearCogniStackSessionState,
+  isUsableHistoryTurn,
 } from "./aiMemory";
 import { DEFAULT_SETTINGS } from "./types";
+
+describe("isUsableHistoryTurn structured marker", () => {
+  it("rejects turns flagged aborted/errored regardless of text", () => {
+    // Content looks perfectly normal — only the structured flag decides.
+    expect(isUsableHistoryTurn("完整的一段回答", "assistant", "aborted")).toBe(false);
+    expect(isUsableHistoryTurn("完整的一段回答", "assistant", "errored")).toBe(false);
+    expect(isUsableHistoryTurn("完整的一段回答", "assistant", null)).toBe(true);
+  });
+
+  it("still drops legacy placeholder text when no flag is present (backward compat)", () => {
+    expect(isUsableHistoryTurn("半截 [已中止生成]", "assistant")).toBe(false);
+    expect(isUsableHistoryTurn("⚠️ 生成遇到错误：boom", "assistant")).toBe(false);
+    expect(isUsableHistoryTurn("思考生成中…", "assistant")).toBe(false);
+  });
+
+  it("still rejects empty content", () => {
+    expect(isUsableHistoryTurn("", "assistant")).toBe(false);
+    expect(isUsableHistoryTurn("   ", "user")).toBe(false);
+  });
+});
 
 describe("aiMemory Built-in sliding window engine", () => {
   it("assembles system prompt and dialogue history correctly", () => {

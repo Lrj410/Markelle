@@ -1,6 +1,4 @@
-use crate::access::{
-    canonicalize_lossy, ensure_allowed, is_symlink, is_under, AppState,
-};
+use crate::access::{canonicalize_lossy, ensure_allowed, is_symlink, is_under, AppState};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,6 +10,21 @@ const MAX_PLUGIN_FILE_BYTES: u64 = 1_500_000;
 const MAX_PLUGIN_MANIFEST_BYTES: u64 = 1024 * 1024;
 /// Hard cap on plugin folders scanned under a single root.
 const MAX_PLUGIN_DIR_ENTRIES: usize = 512;
+/// Resource types `read_plugin_file` may serve. Plugins are CSS-only (API v2,
+/// no JS execution) — anything scriptable/executable must never be returned.
+const ALLOWED_PLUGIN_RES_EXTS: &[&str] = &["css", "json"];
+
+/// Whether `path` carries an extension a plugin resource may have (`.css` / `.json`).
+fn plugin_res_ext_allowed(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            ALLOWED_PLUGIN_RES_EXTS
+                .iter()
+                .any(|x| e.eq_ignore_ascii_case(x))
+        })
+        .unwrap_or(false)
+}
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -56,11 +69,7 @@ pub struct PluginInfo {
 }
 
 /// Parse a `plugin.json` body. `dir` is only used for the default `style.css` fallback.
-pub(crate) fn parse_plugin_manifest_str(
-    raw: &str,
-    dir: &Path,
-    source: &str,
-) -> Option<PluginInfo> {
+pub(crate) fn parse_plugin_manifest_str(raw: &str, dir: &Path, source: &str) -> Option<PluginInfo> {
     let value: serde_json::Value = serde_json::from_str(raw).ok()?;
     parse_plugin_manifest_value(value, dir, source)
 }
@@ -198,8 +207,7 @@ pub(crate) fn parse_plugin_manifest(dir: &Path, source: &str) -> Result<PluginIn
             MAX_PLUGIN_MANIFEST_BYTES / 1024
         ));
     }
-    let raw =
-        fs::read_to_string(&manifest_path).map_err(|e| format!("无法读取插件清单: {e}"))?;
+    let raw = fs::read_to_string(&manifest_path).map_err(|e| format!("无法读取插件清单: {e}"))?;
     parse_plugin_manifest_str(&raw, dir, source).ok_or_else(|| "插件清单格式无效".to_string())
 }
 
@@ -209,7 +217,9 @@ pub(crate) fn scan_plugin_root(root: &Path, source: &str, out: &mut Vec<PluginIn
     };
     for entry in entries.flatten().take(MAX_PLUGIN_DIR_ENTRIES) {
         let path = entry.path();
-        if !path.is_dir() {
+        // Only real directories: `is_dir()` follows symlinks, so a link pointing
+        // outside the vault could otherwise get its plugin listed. Skip links.
+        if is_symlink(&path) || !path.is_dir() {
             continue;
         }
         match parse_plugin_manifest(&path, source) {
@@ -332,6 +342,17 @@ pub(crate) async fn read_plugin_file(
         if !path_canon.is_file() {
             return Err(format!("文件不存在: {}", path.display()));
         }
+        // Plugins are CSS-only: never hand back scripts / HTML / SVG (scriptable
+        // surfaces) even though the response is text.
+        if !plugin_res_ext_allowed(&path_canon) {
+            let ext = path_canon
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("(无扩展名)");
+            return Err(format!(
+                "插件资源仅允许 .css / .json（拒绝脚本或可执行资源: .{ext}）"
+            ));
+        }
         let meta = fs::metadata(&path_canon).map_err(|e| format!("无法读取: {e}"))?;
         if meta.len() > MAX_PLUGIN_FILE_BYTES {
             return Err("插件资源过大".into());
@@ -377,5 +398,20 @@ mod tests {
     fn parse_rejects_missing_id() {
         let raw = r#"{ "name": "No Id" }"#;
         assert!(parse_plugin_manifest_str(raw, Path::new("/tmp/x"), "user").is_none());
+    }
+
+    #[test]
+    fn plugin_resources_only_css_and_json() {
+        assert!(plugin_res_ext_allowed(Path::new("theme.css")));
+        assert!(plugin_res_ext_allowed(Path::new("THEME.CSS")));
+        assert!(plugin_res_ext_allowed(Path::new("settings.json")));
+        // Scriptable / executable surfaces must never be served.
+        assert!(!plugin_res_ext_allowed(Path::new("plugin.js")));
+        assert!(!plugin_res_ext_allowed(Path::new("plugin.mjs")));
+        assert!(!plugin_res_ext_allowed(Path::new("plugin.cjs")));
+        assert!(!plugin_res_ext_allowed(Path::new("index.html")));
+        assert!(!plugin_res_ext_allowed(Path::new("logo.svg")));
+        assert!(!plugin_res_ext_allowed(Path::new("run.exe")));
+        assert!(!plugin_res_ext_allowed(Path::new("noext")));
     }
 }

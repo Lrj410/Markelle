@@ -8,6 +8,13 @@ export interface DiffLine {
 }
 
 /**
+ * Upper bound on the LCS table size (cells). Beyond this a pathological edit
+ * region degrades to a del-all/add-all summary rather than allocating a huge
+ * table. Kept to bound both memory and time.
+ */
+export const MAX_DP_CELLS = 250_000;
+
+/**
  * Computes a line-by-line diff between two text documents.
  * Optimised with common prefix/suffix trimming for sub-millisecond execution.
  */
@@ -62,18 +69,20 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
   const m = middleOld.length;
   const n = middleNew.length;
 
-  if (m * n <= 250000) {
-    // DP LCS
-    const dp: number[][] = Array.from({ length: m + 1 }, () =>
-      new Array<number>(n + 1).fill(0),
-    );
+  if (m * n <= MAX_DP_CELLS) {
+    // DP LCS, stored in one flat Uint32Array: O(m*n) 32-bit ints (~1 MB at the
+    // cap) instead of m+1 boxed rows, so memory stays flat and predictable.
+    const stride = n + 1;
+    const dp = new Uint32Array((m + 1) * stride);
 
     for (let i = 0; i < m; i++) {
       for (let j = 0; j < n; j++) {
         if (middleOld[i] === middleNew[j]) {
-          dp[i + 1]![j + 1] = dp[i]![j]! + 1;
+          dp[(i + 1) * stride + (j + 1)] = dp[i * stride + j] + 1;
         } else {
-          dp[i + 1]![j + 1] = Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
+          const up = dp[i * stride + (j + 1)];
+          const left = dp[(i + 1) * stride + j];
+          dp[(i + 1) * stride + (j + 1)] = up > left ? up : left;
         }
       }
     }
@@ -93,14 +102,14 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
         });
         i--;
         j--;
-      } else if (j > 0 && (i === 0 || dp[i]![j - 1]! >= dp[i - 1]![j]!)) {
+      } else if (j > 0 && (i === 0 || dp[i * stride + (j - 1)] >= dp[(i - 1) * stride + j])) {
         middleDiff.push({
           type: "add",
           text: middleNew[j - 1]!,
           newNum: prefixCount + j,
         });
         j--;
-      } else if (i > 0 && (j === 0 || dp[i]![j - 1]! < dp[i - 1]![j]!)) {
+      } else if (i > 0 && (j === 0 || dp[i * stride + (j - 1)] < dp[(i - 1) * stride + j])) {
         middleDiff.push({
           type: "del",
           text: middleOld[i - 1]!,

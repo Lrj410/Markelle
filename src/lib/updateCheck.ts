@@ -1,5 +1,7 @@
 /** Check GitHub Releases for a newer version (best-effort, no auto-download). */
 
+import { t } from "./i18n";
+
 export interface UpdateInfo {
   latest: string;
   current: string;
@@ -37,10 +39,10 @@ export async function checkForUpdates(
     headers: { Accept: "application/vnd.github+json" },
     signal,
   });
-  if (!res.ok) throw new Error(`更新检查失败 (${res.status})`);
+  if (!res.ok) throw new Error(t("ailib.updateCheckFailed", { status: res.status }));
   const data = (await res.json()) as { tag_name?: string; html_url?: string };
   const latest = (data.tag_name ?? "").replace(/^v/i, "");
-  if (!latest) throw new Error("未找到最新版本");
+  if (!latest) throw new Error(t("ailib.noLatestVersion"));
   return {
     latest,
     current: current.replace(/^v/i, ""),

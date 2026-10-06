@@ -102,7 +102,11 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 #[tauri::command]
-pub fn set_tray_visible(app: AppHandle, visible: bool, locale: Option<String>) -> Result<(), String> {
+pub fn set_tray_visible(
+    app: AppHandle,
+    visible: bool,
+    locale: Option<String>,
+) -> Result<(), String> {
     if let Some(loc) = locale {
         if let Ok(mut g) = TRAY_LOCALE.lock() {
             *g = Some(loc);
@@ -139,7 +143,27 @@ pub fn set_tray_visible(app: AppHandle, visible: bool, locale: Option<String>) -
     Ok(())
 }
 
+/// Best-effort quit grace period. On quit we first emit `app://before-quit` so
+/// the frontend can flush unsaved editor content and any in-flight history
+/// snapshot write, then we wait this long before exiting for real.
+///
+/// The handshake is intentionally fire-and-forget: a frontend that does not (yet)
+/// listen for the event must NOT be able to hang the quit, so this is a hard
+/// timeout, not a wait for an acknowledgement. Keeping it short (<½s) means the
+/// worst case is a barely-perceptible delay rather than a "stuck" app.
+const QUIT_GRACE: std::time::Duration = std::time::Duration::from_millis(400);
+
 #[tauri::command]
 pub fn quit_app(app: AppHandle) {
-    app.exit(0);
+    // Ask the frontend to flush. Deliberately ignore the result: no listener is a
+    // valid, expected state (this degrades to today's immediate-exit behaviour).
+    let _ = app.emit("app://before-quit", ());
+    // Wait out the grace period on a detached thread so this command never blocks
+    // the IPC caller, then exit unconditionally — the frontend must not be able to
+    // prevent the app from closing.
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(QUIT_GRACE);
+        handle.exit(0);
+    });
 }

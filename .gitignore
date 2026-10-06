@@ -40,4 +40,3 @@ _audit_tmp.md
 # Env secrets
 .env
 .env.*
-!.env.example

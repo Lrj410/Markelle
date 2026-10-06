@@ -5,6 +5,7 @@
 
 import type { ReaderSettings } from "./types";
 import { type ChatMessage, smartSliceMarkdown, ollamaGenerate } from "./ollama";
+import { t } from "./i18n";
 import {
   cogniStackPrepare,
   type CogniStackDialogueItem,
@@ -15,9 +16,17 @@ import {
   formatCogniStackTranscript,
 } from "./cognistack";
 
+/** Structured marker for a stored AI turn that must not be reused as context. */
+export type HistoryTurnFlag = "aborted" | "errored";
+
 export interface PrepareContextParams {
   settings: ReaderSettings;
-  dialogueHistory: Array<{ id?: string; role: "user" | "assistant" | "system"; content: string }>;
+  dialogueHistory: Array<{
+    id?: string;
+    role: "user" | "assistant" | "system";
+    content: string;
+    turn?: HistoryTurnFlag | null;
+  }>;
   currentPrompt: string;
   currentPromptId?: string;
   activeDocContent?: string;
@@ -103,10 +112,20 @@ export function clearCogniStackSessionState(): void {
 let isSummarizing = false;
 
 /** Drop empty / aborted / error-placeholder turns so they do not poison context. */
-export function isUsableHistoryTurn(content: string, role: string): boolean {
+export function isUsableHistoryTurn(
+  content: string,
+  role: string,
+  flag?: HistoryTurnFlag | null,
+): boolean {
+  // Structured marker (set by the UI when a turn aborts or errors) wins and is
+  // language-independent — it survives locale changes and placeholder edits.
+  if (flag === "aborted" || flag === "errored") return false;
   const text = (content || "").trim();
   if (!text) return false;
   if (role === "assistant") {
+    // Backward compatibility: turns persisted before the `turn` flag existed
+    // carry only the placeholder text, so fall back to matching it. Locale-
+    // dependent by nature; every newly written turn sets the flag above.
     if (/\[已中止生成\]/.test(text)) return false;
     if (/⚠️\s*生成遇到错误/.test(text)) return false;
     if (/^思考生成中/.test(text)) return false;
@@ -148,7 +167,7 @@ export async function runCogniStackBackgroundSummarize(params: {
       maxCharsHint: 800,
     });
 
-    onStatus?.("CogniStack 正在后台提炼长期记忆…");
+    onStatus?.(t("ailib.summarizing"));
 
     const llmOut = await ollamaGenerate({
       settings,
@@ -182,12 +201,12 @@ export async function runCogniStackBackgroundSummarize(params: {
       summarizedThroughMessageId: throughId,
     });
 
-    onStatus?.(`CogniStack 长期记忆已更新（水位 ${throughId}）`);
+    onStatus?.(t("ailib.memoryUpdated", { watermark: throughId }));
     return true;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("CogniStack background summarize skipped:", msg);
-    onStatus?.(`CogniStack 记忆提炼跳过：${msg.slice(0, 120)}`);
+    onStatus?.(t("ailib.memorySkipped", { error: msg.slice(0, 120) }));
     return false;
   } finally {
     isSummarizing = false;
@@ -199,7 +218,11 @@ export async function runCogniStackBackgroundSummarize(params: {
  */
 export function assembleBuiltinContext(
   systemPrompt: string,
-  history: Array<{ role: "user" | "assistant" | "system"; content: string }>,
+  history: Array<{
+    role: "user" | "assistant" | "system";
+    content: string;
+    turn?: HistoryTurnFlag | null;
+  }>,
   currentPrompt: string,
   docContext?: string,
   maxHistoryTurns = 8,
@@ -213,7 +236,9 @@ export function assembleBuiltinContext(
     "你是一位专业高效的个人知识库助手，请直接输出精炼、准确的 Markdown 格式结果。";
   result.push({ role: "system", content: cleanSystem });
 
-  const usable = history.filter((m) => m.role !== "system" && isUsableHistoryTurn(m.content, m.role));
+  const usable = history.filter(
+    (m) => m.role !== "system" && isUsableHistoryTurn(m.content, m.role, m.turn),
+  );
   const recent = usable.slice(-maxHistoryTurns);
 
   // Soft char budget: drop oldest history turns first
@@ -273,7 +298,7 @@ export async function prepareConversationContext(
     let msgCounter = 1;
     const rawDialogue: CogniStackDialogueItem[] = [
       ...dialogueHistory
-        .filter((m) => m.role !== "system" && isUsableHistoryTurn(m.content, m.role))
+        .filter((m) => m.role !== "system" && isUsableHistoryTurn(m.content, m.role, m.turn))
         .map((m) => ({
           id: m.id || `m${msgCounter++}`,
           role: m.role,
@@ -310,7 +335,7 @@ export async function prepareConversationContext(
       if (cogniRes.ok && cogniRes.messages.length > 0) {
         const warningNotice =
           cogniRes.emergencyDroppedCount && cogniRes.emergencyDroppedCount > 0
-            ? `上下文预算超限：CogniStack 紧急裁去了 ${cogniRes.emergencyDroppedCount} 条历史对话（建议沉淀长期记忆）`
+            ? t("ailib.emergencyDropped", { count: cogniRes.emergencyDroppedCount })
             : undefined;
 
         return {
@@ -319,7 +344,7 @@ export async function prepareConversationContext(
           shouldSummarize: cogniRes.shouldSummarize,
           cogniStackResult: cogniRes,
           warningNotice,
-          budgetNotice: cogniRes.budget ? `CogniStack 预算装配就绪` : undefined,
+          budgetNotice: cogniRes.budget ? t("ailib.budgetReady") : undefined,
         };
       }
 
@@ -334,7 +359,9 @@ export async function prepareConversationContext(
       return {
         engineUsed: "builtin",
         messages: fallbackMsgs,
-        error: `CogniStack 连接降级: ${cogniRes.error || "未响应"}，已自动切换为内置引擎`,
+        error: t("ailib.fallbackError", {
+          error: cogniRes.error || t("ailib.noResponse"),
+        }),
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -349,7 +376,7 @@ export async function prepareConversationContext(
       return {
         engineUsed: "builtin",
         messages: fallbackMsgs,
-        error: `CogniStack 网关异常 (${msg})，已平滑切换为内置引擎`,
+        error: t("ailib.gatewayError", { error: msg }),
       };
     }
   }

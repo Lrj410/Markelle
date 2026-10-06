@@ -41,7 +41,9 @@ export function Welcome({
 }: Props) {
   useLocale();
   const [expanded, setExpanded] = useState(false);
-  const [version, setVersion] = useState("0.1.0");
+  // Empty until getVersion() resolves — a failed lookup must never show a
+  // stale hardcoded version.
+  const [version, setVersion] = useState("");
 
   useEffect(() => {
     void getVersion()
@@ -71,8 +73,8 @@ export function Welcome({
             </div>
             <div className="welcome-brand-text">
               <div className="welcome-brand-row">
-                <span className="welcome-title">Markelle</span>
-                <span className="welcome-version-pill">v{version}</span>
+                <h1 className="welcome-title">Markelle</h1>
+                {version ? <span className="welcome-version-pill">v{version}</span> : null}
               </div>
               <p className="welcome-subtitle">{t("welcome.subtitle")}</p>
             </div>

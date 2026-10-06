@@ -75,7 +75,6 @@ export function Select<T extends string>({
         bottom: openUp ? window.innerHeight - r.top + 4 : undefined,
         left: Math.min(r.left, window.innerWidth - width - 8),
         width,
-        zIndex: 120,
       });
     };
     place();

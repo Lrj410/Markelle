@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { extractWikiLinks } from "./obsidian";
-import { joinPath, toPosixPath, basename, trimTrailingSep } from "./paths";
+import { joinPath, toPosixPath, trimTrailingSep } from "./paths";
 import {
   decodeFsPath,
   parseMdImageDestination,
@@ -49,73 +49,6 @@ export function collectMediaTargets(source: string): string[] {
   }
 
   return out.slice(0, 80);
-}
-
-/**
- * Sync candidate absolute paths (Obsidian-style guesses).
- * First hit that exists is preferred by the Rust resolver; this list seeds UI tests.
- * NOTE: currently exercised only by tests — keep it (do not delete) as the
- * documented reference for the Rust resolver's search order.
- */
-export function candidateMediaAbsPaths(
-  target: string,
-  baseDir: string,
-  vaultRoot?: string | null,
-  attachmentFolder = "attachments",
-): string[] {
-  let raw = decodeFsPath(target.trim().replace(/\\/g, "/"));
-  if (!raw) return [];
-  // `/C:/Users/...` → `C:/Users/...`
-  if (/^\/[A-Za-z]:\//.test(raw)) raw = raw.slice(1);
-  // Broken links that still embed an absolute Windows path
-  const driveAt = raw.search(/[A-Za-z]:\//);
-  if (driveAt > 0) {
-    raw = raw.slice(driveAt);
-  }
-
-  const out: string[] = [];
-  const push = (p: string) => {
-    const n = toPosixPath(p);
-    if (!n || out.includes(n)) return;
-    out.push(n);
-  };
-
-  if (/^[a-zA-Z]:\//.test(raw) || (raw.startsWith("/") && !raw.startsWith("//"))) {
-    push(raw);
-  }
-
-  const base = toPosixPath(baseDir).replace(/\/$/, "");
-  const root = vaultRoot ? toPosixPath(vaultRoot).replace(/\/$/, "") : "";
-  const name = basename(raw);
-  const folder =
-    attachmentFolder.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "") || "attachments";
-
-  if (base && !/^[a-zA-Z]:\//.test(raw)) {
-    push(joinPath(base, raw));
-  }
-  if (root) {
-    if (!raw.includes("..")) push(joinPath(root, raw));
-    push(joinPath(root, name));
-    push(joinPath(root, folder, name));
-    // Dated attachment folders (Markelle paste/import convention).
-    const now = new Date();
-    const yyyy = String(now.getFullYear());
-    const mm = String(now.getMonth() + 1).padStart(2, "0");
-    push(joinPath(root, folder, yyyy, mm, name));
-    // Previous month (notes edited across month boundary).
-    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const py = String(prev.getFullYear());
-    const pm = String(prev.getMonth() + 1).padStart(2, "0");
-    if (py !== yyyy || pm !== mm) {
-      push(joinPath(root, folder, py, pm, name));
-    }
-    if (!raw.includes("..") && raw.includes("/")) {
-      push(joinPath(root, folder, raw));
-    }
-    push(joinPath(base, folder, name));
-  }
-
-  return out;
 }
 
 /** Resolve a media wiki/markdown target to an absolute filesystem path (ACL-gated). */

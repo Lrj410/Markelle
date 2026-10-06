@@ -17,6 +17,7 @@ export function TagsPanel({ vaultRoot, onOpenFile }: Props) {
   useLocale();
   const [tags, setTags] = useState<TagInfo[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const [filter, setFilter] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -24,18 +25,23 @@ export function TagsPanel({ vaultRoot, onOpenFile }: Props) {
     if (!vaultRoot) {
       setTags([]);
       setLoading(false);
+      setError("");
       setExpanded(null);
       return;
     }
     let cancelled = false;
     setLoading(true);
+    setError("");
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
           const result = await listVaultTags(vaultRoot);
           if (!cancelled) setTags(result);
-        } catch {
-          if (!cancelled) setTags([]);
+        } catch (err) {
+          if (!cancelled) {
+            setTags([]);
+            setError(err instanceof Error ? err.message : String(err));
+          }
         } finally {
           if (!cancelled) setLoading(false);
         }
@@ -75,7 +81,8 @@ export function TagsPanel({ vaultRoot, onOpenFile }: Props) {
       {loading && tags.length === 0 && (
         <p className="backlinks-empty quiet">…</p>
       )}
-      {!loading && filtered.length === 0 && (
+      {error && <p className="backlinks-empty">{error}</p>}
+      {!loading && !error && filtered.length === 0 && (
         <p className="backlinks-empty">{t("cmd.empty")}</p>
       )}
       {filtered.length > 0 && (

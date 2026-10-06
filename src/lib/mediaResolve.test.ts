@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  candidateMediaAbsPaths,
-  collectMediaTargets,
-  isMediaTarget,
-} from "./mediaResolve";
+import { collectMediaTargets, isMediaTarget } from "./mediaResolve";
 import { renderMarkdown } from "./markdown";
 import { toGatedAssetUrl } from "./assets";
 
@@ -26,32 +22,6 @@ describe("mediaResolve", () => {
       "3840x2160.jpg",
       "attachments/a.png",
     ]);
-  });
-
-  it("builds Obsidian-style candidate paths", () => {
-    const cands = candidateMediaAbsPaths(
-      "3840x2160.jpg",
-      "C:/vault/日记",
-      "C:/vault",
-      "attachments",
-    );
-    expect(cands).toContain("C:/vault/日记/3840x2160.jpg");
-    expect(cands).toContain("C:/vault/3840x2160.jpg");
-    expect(cands).toContain("C:/vault/attachments/3840x2160.jpg");
-    const yyyy = String(new Date().getFullYear());
-    const mm = String(new Date().getMonth() + 1).padStart(2, "0");
-    expect(cands).toContain(`C:/vault/attachments/${yyyy}/${mm}/3840x2160.jpg`);
-  });
-
-  it("recovers absolute path from broken ../../../../C:/ links", () => {
-    const cands = candidateMediaAbsPaths(
-      "../../../../../../C:/Users/18755/Desktop/test/attachments/2026/09/3840x2160.jpg",
-      "C:/Users/18755/Desktop/test/日记",
-      "C:/Users/18755/Desktop/test",
-    );
-    expect(cands[0]).toBe(
-      "C:/Users/18755/Desktop/test/attachments/2026/09/3840x2160.jpg",
-    );
   });
 });
 

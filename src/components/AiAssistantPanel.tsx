@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import clsx from "clsx";
 import type { ReaderSettings } from "../lib/types";
 import {
@@ -22,6 +22,7 @@ import {
 import { cogniStackCheckHealth } from "../lib/cognistack";
 import { t } from "../lib/i18n";
 import { useLocale } from "../hooks/useLocale";
+import { useModalFocusTrap } from "../hooks/useModalFocusTrap";
 import { renderMarkdown } from "../lib/markdown";
 
 export interface AiChatMessage {
@@ -33,7 +34,19 @@ export interface AiChatMessage {
   prompt?: string;
   /** When true, document context was already embedded in prompt */
   embedSource?: boolean;
+  /**
+   * Structured marker for a turn that must not be reused as context.
+   * Language-independent — see isUsableHistoryTurn in lib/aiMemory.
+   */
+  turn?: "aborted" | "errored";
 }
+
+/**
+ * Upper bound on the chat list — used for BOTH the persisted slice and the
+ * in-memory array, so the list (and its per-chunk markdown re-render) cannot
+ * grow without limit over a long session.
+ */
+const MAX_CHAT_MESSAGES = 40;
 
 interface Props {
   settings: ReaderSettings;
@@ -193,10 +206,27 @@ function IconCheck({ size = 12 }: { size?: number }) {
 }
 
 /* --------------------------------------------------------------------------
+   Memoized markdown body
+   --------------------------------------------------------------------------
+   Streaming appends a chunk to ONE message, but the list re-renders in full on
+   every chunk. Rendering markdown-it + highlight.js for every historical
+   message on each chunk is O(n²) over the session. Memoising on `content` means
+   only the message that actually changed re-parses.
+   -------------------------------------------------------------------------- */
+const MemoizedMarkdown = memo(function MemoizedMarkdown({ content }: { content: string }) {
+  return (
+    <div
+      className="ai-markdown-rendered markdown-body"
+      dangerouslySetInnerHTML={{ __html: renderMarkdown(content).html }}
+    />
+  );
+});
+
+/* --------------------------------------------------------------------------
    AiAssistantPanel Component
    -------------------------------------------------------------------------- */
 
-export function AiAssistantPanel({
+function AiAssistantPanelInner({
   settings,
   activePath,
   activeContent,
@@ -215,7 +245,7 @@ export function AiAssistantPanel({
   const [messages, setMessages] = useState<AiChatMessage[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) return JSON.parse(saved) as AiChatMessage[];
+      if (saved) return (JSON.parse(saved) as AiChatMessage[]).slice(-MAX_CHAT_MESSAGES);
     } catch {
       // Ignore
     }
@@ -251,10 +281,29 @@ export function AiAssistantPanel({
   const [showMemoryModal, setShowMemoryModal] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const feedbackTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const memoryModalRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+
+  // Focus trap + Escape dismissal for the memory inspector dialog.
+  useModalFocusTrap({
+    active: showMemoryModal,
+    containerRef: memoryModalRef,
+    onEscape: () => setShowMemoryModal(false),
+    initialFocusSelector: ".ai-memory-modal-footer .btn.primary",
+  });
+
+  /** Schedule a micro-feedback reset, tracking the handle so unmount can clear it. */
+  const scheduleFeedbackReset = useCallback((reset: () => void, ms: number) => {
+    const id = setTimeout(() => {
+      feedbackTimersRef.current.delete(id);
+      reset();
+    }, ms);
+    feedbackTimersRef.current.add(id);
+  }, []);
 
   const resolveSelection = useCallback(() => {
     const live = getSelectedText?.()?.trim() || "";
@@ -275,22 +324,28 @@ export function AiAssistantPanel({
       if (messages.length === 0) {
         localStorage.removeItem(STORAGE_KEY);
       } else {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-40)));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-MAX_CHAT_MESSAGES)));
       }
     } catch {
       // Ignore storage errors
     }
   }, [messages]);
 
-  // Poll live editor selection so the context bar stays accurate
+  // Track the live editor selection so the context bar stays accurate.
+  // A `selectionchange` listener replaces the old 600 ms poll: it fires exactly
+  // when the selection moves (editor or read-mode) with no idle wakeups.
   useEffect(() => {
     const tick = () => {
       const len = resolveSelection().length;
       setLiveSelectionLen((prev) => (prev === len ? prev : len));
     };
     tick();
-    const id = window.setInterval(tick, 600);
-    return () => window.clearInterval(id);
+    document.addEventListener("selectionchange", tick);
+    window.addEventListener("focus", tick);
+    return () => {
+      document.removeEventListener("selectionchange", tick);
+      window.removeEventListener("focus", tick);
+    };
   }, [resolveSelection]);
 
   // Escape stops generation
@@ -306,6 +361,20 @@ export function AiAssistantPanel({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onStatus]);
+
+  // Dock renders only the active panel, so switching panels unmounts this
+  // component mid-stream. Abort the in-flight fetch (stops the stream and the
+  // wasted tokens) and drop every pending feedback timer so nothing schedules
+  // state writes after unmount.
+  useEffect(() => {
+    const timers = feedbackTimersRef.current;
+    return () => {
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+      timers.forEach((id) => clearTimeout(id));
+      timers.clear();
+    };
+  }, []);
 
   // Initial connection check if enabled
   useEffect(() => {
@@ -398,10 +467,13 @@ export function AiAssistantPanel({
         },
       ];
 
-      setMessages([
-        ...nextMessages,
-        { id: assistantMsgId, role: "assistant", content: "", timestamp: Date.now() },
-      ]);
+      const assistantMessage: AiChatMessage = {
+        id: assistantMsgId,
+        role: "assistant",
+        content: "",
+        timestamp: Date.now(),
+      };
+      setMessages([...nextMessages, assistantMessage].slice(-MAX_CHAT_MESSAGES));
 
       setGenerating(true);
       const controller = new AbortController();
@@ -414,6 +486,7 @@ export function AiAssistantPanel({
             id: m.id,
             role: m.role,
             content: m.content,
+            turn: m.turn,
           })),
           currentPrompt: userPrompt,
           currentPromptId: userMsgId,
@@ -474,7 +547,7 @@ export function AiAssistantPanel({
                 if (m.id !== assistantMsgId) return m;
                 const body = m.content.trim();
                 if (!body) return null;
-                return { ...m, content: `${body} ${t("ai.abortedSuffix")}` };
+                return { ...m, content: `${body} ${t("ai.abortedSuffix")}`, turn: "aborted" };
               })
               .filter((m): m is AiChatMessage => m != null),
           );
@@ -486,6 +559,7 @@ export function AiAssistantPanel({
                 ? {
                     ...m,
                     content: `${m.content ? `${m.content}\n\n` : ""}⚠️ ${t("ai.error", { error: errMsg })}`,
+                    turn: "errored",
                   }
                 : m,
             ),
@@ -600,8 +674,8 @@ export function AiAssistantPanel({
     onCreateNote(title, mdContent);
     setSavedAllNote(true);
     onStatus?.(t("ai.chatSaved"));
-    setTimeout(() => setSavedAllNote(false), 2000);
-  }, [onCreateNote, messages, settings.aiEngineMode, settings.ollamaModel, onStatus]);
+    scheduleFeedbackReset(() => setSavedAllNote(false), 2000);
+  }, [onCreateNote, messages, settings.aiEngineMode, settings.ollamaModel, onStatus, scheduleFeedbackReset]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -614,7 +688,7 @@ export function AiAssistantPanel({
     void navigator.clipboard.writeText(cleanOutput(text));
     setCopiedId(id);
     onStatus?.(t("ai.copied"));
-    setTimeout(() => setCopiedId(null), 1800);
+    scheduleFeedbackReset(() => setCopiedId(null), 1800);
   };
 
   const handleInsert = (id: string, text: string) => {
@@ -622,7 +696,7 @@ export function AiAssistantPanel({
     onInsertText(cleanOutput(text));
     setInsertedId(id);
     onStatus?.(t("ai.inserted"));
-    setTimeout(() => setInsertedId(null), 1800);
+    scheduleFeedbackReset(() => setInsertedId(null), 1800);
   };
 
   const handleAppend = (id: string, text: string) => {
@@ -630,7 +704,7 @@ export function AiAssistantPanel({
     onAppendText(cleanOutput(text));
     setInsertedId(id);
     onStatus?.(t("ai.appended"));
-    setTimeout(() => setInsertedId(null), 1800);
+    scheduleFeedbackReset(() => setInsertedId(null), 1800);
   };
 
   const handleReplaceWhole = (id: string, text: string) => {
@@ -638,7 +712,7 @@ export function AiAssistantPanel({
     onReplaceContent(cleanOutput(text));
     setReplacedWholeId(id);
     onStatus?.(t("ai.replacedWhole"));
-    setTimeout(() => setReplacedWholeId(null), 1800);
+    scheduleFeedbackReset(() => setReplacedWholeId(null), 1800);
   };
 
   const handleReplaceSelection = (id: string, text: string) => {
@@ -646,7 +720,7 @@ export function AiAssistantPanel({
     onReplaceSelection(cleanOutput(text));
     setReplacedSelId(id);
     onStatus?.(t("ai.replacedSelection"));
-    setTimeout(() => setReplacedSelId(null), 1800);
+    scheduleFeedbackReset(() => setReplacedSelId(null), 1800);
   };
 
   const handleCreateNote = (id: string, text: string) => {
@@ -657,7 +731,7 @@ export function AiAssistantPanel({
     onCreateNote(title, cleanOutput(text));
     setCreatedNoteId(id);
     onStatus?.(t("ai.created"));
-    setTimeout(() => setCreatedNoteId(null), 1800);
+    scheduleFeedbackReset(() => setCreatedNoteId(null), 1800);
   };
 
   const hasLiveSelection = liveSelectionLen > 0;
@@ -727,12 +801,12 @@ export function AiAssistantPanel({
                     cursor: "pointer",
                     background:
                       cogniMemoryCount > 0
-                        ? "color-mix(in srgb, var(--color-primary) 14%, transparent)"
+                        ? "color-mix(in srgb, var(--accent) 14%, transparent)"
                         : "rgba(120, 120, 120, 0.08)",
-                    color: cogniMemoryCount > 0 ? "var(--color-primary)" : "var(--ink-soft)",
+                    color: cogniMemoryCount > 0 ? "var(--accent-text)" : "var(--ink-soft)",
                     borderColor:
                       cogniMemoryCount > 0
-                        ? "color-mix(in srgb, var(--color-primary) 35%, transparent)"
+                        ? "color-mix(in srgb, var(--accent) 35%, transparent)"
                         : "var(--line)",
                   }}
                   title={t("ai.cogniOpenTitle")}
@@ -756,7 +830,7 @@ export function AiAssistantPanel({
               onClick={handleSaveWholeChat}
               title={savedAllNote ? t("ai.savedNote") : t("ai.saveChat")}
               aria-label={t("ai.saveChatAria")}
-              style={{ color: savedAllNote ? "var(--color-primary)" : undefined }}
+              style={{ color: savedAllNote ? "var(--accent-text)" : undefined }}
             >
               {savedAllNote ? <IconCheck size={14} /> : <IconNewNote size={14} />}
             </button>
@@ -918,13 +992,8 @@ export function AiAssistantPanel({
               </div>
               <div className="ai-message-content">
                 {msg.role === "assistant" ? (
-                  <div
-                    className="ai-markdown-rendered markdown-body"
-                    dangerouslySetInnerHTML={{
-                      __html: renderMarkdown(
-                        msg.content || (generating ? t("ai.thinking") : ""),
-                      ).html,
-                    }}
+                  <MemoizedMarkdown
+                    content={msg.content || (generating ? t("ai.thinking") : "")}
                   />
                 ) : (
                   <div className="ai-text-user">{msg.content}</div>
@@ -1103,14 +1172,24 @@ export function AiAssistantPanel({
       {/* CogniStack Memory Inspector Modal */}
       {showMemoryModal && (
         <div className="ai-memory-modal-overlay" onClick={() => setShowMemoryModal(false)}>
-          <div className="ai-memory-modal" onClick={(e) => e.stopPropagation()}>
+          <div
+            ref={memoryModalRef}
+            className="ai-memory-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ai-memory-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="ai-memory-modal-head">
-              <div className="ai-memory-modal-title">{t("ai.memoryModalTitle")}</div>
+              <div className="ai-memory-modal-title" id="ai-memory-modal-title">
+                {t("ai.memoryModalTitle")}
+              </div>
               <button
                 type="button"
                 className="ai-icon-btn"
                 onClick={() => setShowMemoryModal(false)}
                 title={t("ai.close")}
+                aria-label={t("ai.close")}
               >
                 ✕
               </button>
@@ -1193,3 +1272,5 @@ export function AiAssistantPanel({
     </div>
   );
 }
+
+export const AiAssistantPanel = memo(AiAssistantPanelInner);

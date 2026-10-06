@@ -45,24 +45,22 @@ pub fn normalize_path(path: &Path) -> Result<PathBuf, String> {
                 has_root = true;
             }
             Component::CurDir => {}
-            Component::ParentDir => {
-                match out.components().next_back() {
-                    None | Some(Component::Prefix(_)) | Some(Component::RootDir) => {
-                        if has_root || out.components().any(|c| matches!(c, Component::Prefix(_))) {
-                            return Err("路径包含非法的上级目录引用 (..)".into());
-                        }
-                        out.push("..");
+            Component::ParentDir => match out.components().next_back() {
+                None | Some(Component::Prefix(_)) | Some(Component::RootDir) => {
+                    if has_root || out.components().any(|c| matches!(c, Component::Prefix(_))) {
+                        return Err("路径包含非法的上级目录引用 (..)".into());
                     }
-                    Some(Component::ParentDir) => out.push(".."),
-                    Some(Component::Normal(_)) => {
-                        out.pop();
-                    }
-                    Some(Component::CurDir) => {
-                        out.pop();
-                        out.push("..");
-                    }
+                    out.push("..");
                 }
-            }
+                Some(Component::ParentDir) => out.push(".."),
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                Some(Component::CurDir) => {
+                    out.pop();
+                    out.push("..");
+                }
+            },
             Component::Normal(s) => out.push(s),
         }
     }
@@ -146,7 +144,8 @@ const SAME_DIR_ALLOWED_EXTS: &[&str] = &[
     "md", "markdown", "mdown", "mkd", // images
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "ico", "heic", "heif", // audio
     "mp3", "wav", "ogg", "m4a", "aac", "flac", // video
-    "mp4", "webm", "ogv", "mov", // documents / archives accepted by the attachment import path
+    "mp4", "webm", "ogv",
+    "mov", // documents / archives accepted by the attachment import path
     "pdf", "zip",
 ];
 
@@ -190,6 +189,37 @@ impl AccessSet {
             }
         }
         Ok(())
+    }
+
+    /// The granted ancestor that authorizes `path` (vault root, explicit dir, or
+    /// same-directory grant), if any.
+    ///
+    /// Captured before an async write so the blocking thread can re-verify that
+    /// the parent directory is still inside the grant after the ACL check-to-use
+    /// gap (see [`verify_parent_within`]).
+    pub fn containment_root(&self, path: &Path) -> Option<PathBuf> {
+        let path = resolve_for_acl(path).ok()?;
+        if self.files.contains(&path) {
+            return path.parent().map(Path::to_path_buf);
+        }
+        if self.dirs.contains(&path) {
+            return Some(path);
+        }
+        for root in &self.vault_roots {
+            if is_under(&path, root) {
+                return Some(root.clone());
+            }
+        }
+        if has_supported_ext(&path) {
+            if let Some(parent) = path.parent() {
+                if let Ok(parent) = resolve_for_acl(parent) {
+                    if self.dirs.contains(&parent) {
+                        return Some(parent);
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub fn is_allowed(&self, path: &Path) -> bool {
@@ -243,6 +273,26 @@ pub fn ensure_allowed(state: &AppState, path: &Path) -> Result<(), String> {
     }
 }
 
+/// Re-verify, right before a write/rename, that `parent` is still inside the
+/// granted `root` and is not a symlink.
+///
+/// `ensure_allowed` validates a path and the caller then creates directories and
+/// writes. In that window the parent can be swapped for a symlink/junction that
+/// redirects the write outside the vault. This closes most of that gap; a small
+/// residual window remains between this check and the write itself, and a full
+/// handle-based (`openat`-style) rewrite is out of scope.
+pub fn verify_parent_within(root: &Path, parent: &Path) -> Result<(), String> {
+    if is_symlink(parent) {
+        return Err("拒绝在符号链接目录下写入".into());
+    }
+    let root = resolve_for_acl(root)?;
+    let parent = resolve_for_acl(parent)?;
+    if !is_under(&parent, &root) {
+        return Err(format!("写入目录已超出授权范围: {}", parent.display()));
+    }
+    Ok(())
+}
+
 pub fn register_file(app: &AppHandle, path: &Path) -> Result<(), String> {
     let resolved = resolve_for_acl(path)?;
     let state = app.state::<AppState>();
@@ -286,6 +336,18 @@ pub fn reject_overbroad_root(path: &Path) -> Result<(), String> {
         .collect();
     if normals.is_empty() {
         return Err("拒绝将磁盘根目录注册为库".into());
+    }
+
+    // 用户私密配置目录：一旦注册为库，库内读命令即可读取私钥 / 凭据（如 `~/.ssh/id_rsa`）。
+    // 只要路径任意一段命中即拒绝（`normals` 已小写，Windows 下天然大小写不敏感）。
+    const SENSITIVE_DIRS: &[&str] = &[
+        ".ssh", ".aws", ".gnupg", ".kube", ".config", ".docker", ".azure", ".npmrc",
+    ];
+    if let Some(seg) = normals
+        .iter()
+        .find(|n| SENSITIVE_DIRS.contains(&n.as_str()))
+    {
+        return Err(format!("拒绝将敏感配置目录注册为库: {seg}"));
     }
 
     // `C:\Users`, `C:\Windows`, `/home`, `/etc` etc. are too broad for recursive ACL.
@@ -341,8 +403,8 @@ pub fn reject_overbroad_root(path: &Path) -> Result<(), String> {
 
     // Unix system trees (`/etc`, `/usr`, ...). Windows drive paths carry a
     // `Prefix` component, so they never take this branch.
-    let is_unix_like = path.has_root()
-        && !path.components().any(|c| matches!(c, Component::Prefix(_)));
+    let is_unix_like =
+        path.has_root() && !path.components().any(|c| matches!(c, Component::Prefix(_)));
     if is_unix_like {
         const UNIX_BLOCKED: &[&str] = &[
             "etc",
@@ -382,32 +444,73 @@ pub fn revoke_vault(app: &AppHandle, root: &Path) -> Result<(), String> {
     if let Some(cache) = app.try_state::<crate::vault_index::IndexCache>() {
         cache.clear();
     }
-    crate::vault_watch::stop_vault_watch();
+    // Stop only this vault's watcher — other open vaults keep watching.
+    crate::vault_watch::stop_vault_watch(&resolved);
+    // Drop cached mmaps / line indexes for files under the revoked root so a
+    // closed or unauthorized vault does not keep them alive forever.
+    if let Some(store) = app.try_state::<crate::large_file::LargeFileStore>() {
+        store.clear_under_root(&resolved);
+    }
     // Asset loads go through the ACL-gated `mklasset` protocol (see lib.rs).
     // Clearing our ACL immediately denies new asset fetches. We intentionally do
     // NOT call Scope::forbid_directory — forbid permanently blocks re-allow.
-    let _ = resolved;
     Ok(())
 }
 
 /// Intentional user authorization only (dialog / drop / CLI / save-as).
 /// Never called implicitly from read/write.
-#[tauri::command]
-pub fn register_access(app: AppHandle, paths: Vec<String>) -> Result<(), String> {
+///
+/// All paths are validated up-front and only then committed, so a call that
+/// rejects one path leaves the ACL completely untouched (no partial grants).
+pub(crate) fn register_paths(access: &mut AccessSet, paths: &[String]) -> Result<(), String> {
+    enum Target {
+        Vault(PathBuf),
+        File(PathBuf),
+    }
+
+    // Phase 1 — validate every path with no side effects.
+    let mut targets: Vec<Target> = Vec::with_capacity(paths.len());
     for raw in paths {
-        let path = PathBuf::from(&raw);
+        let path = PathBuf::from(raw);
         // Hard reject raw `..` segments before any registration.
         if path.components().any(|c| matches!(c, Component::ParentDir)) {
             return Err(format!("拒绝包含 .. 的路径: {raw}"));
         }
+        let resolved = resolve_for_acl(&path)?;
         if path.is_dir() {
-            register_vault(&app, &path)?;
+            reject_overbroad_root(&resolved)?;
+            targets.push(Target::Vault(resolved));
         } else {
             // Existing file, or save-as target that does not exist yet.
-            register_file(&app, &path)?;
+            if resolved
+                .components()
+                .any(|c| matches!(c, Component::ParentDir))
+            {
+                return Err("拒绝包含 .. 的路径".into());
+            }
+            targets.push(Target::File(resolved));
+        }
+    }
+
+    // Phase 2 — commit. Phase 1 already ran every `allow_*` precondition, so this
+    // loop cannot fail partway and leave earlier grants behind.
+    for target in targets {
+        match target {
+            Target::Vault(p) => access.allow_vault(&p)?,
+            Target::File(p) => access.allow_file(&p)?,
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn register_access(app: AppHandle, paths: Vec<String>) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut access = state
+        .access
+        .lock()
+        .map_err(|_| "访问控制锁失败".to_string())?;
+    register_paths(&mut access, &paths)
 }
 
 #[tauri::command]
@@ -515,5 +618,54 @@ mod tests {
         // Unrelated files in the same folder are not exposed.
         assert!(!set.is_allowed(Path::new("C:/notes/secrets.txt")));
         assert!(!set.is_allowed(Path::new("C:/notes/keys.pem")));
+    }
+
+    #[test]
+    fn reject_overbroad_blocks_sensitive_dot_dirs() {
+        // Windows 风格与 Unix 风格都必须拒绝：注册后整棵子树可读（私钥 / 凭据）。
+        assert!(reject_overbroad_root(Path::new("C:/Users/alice/.ssh")).is_err());
+        assert!(reject_overbroad_root(Path::new("C:/Users/alice/.aws")).is_err());
+        assert!(reject_overbroad_root(Path::new("C:/Users/alice/.gnupg")).is_err());
+        assert!(reject_overbroad_root(Path::new("/Users/alice/.ssh")).is_err());
+        assert!(reject_overbroad_root(Path::new("/home/alice/.ssh")).is_err());
+        assert!(reject_overbroad_root(Path::new("/home/alice/.kube")).is_err());
+        assert!(reject_overbroad_root(Path::new("D:/notes/.docker")).is_err());
+        assert!(reject_overbroad_root(Path::new("D:/notes/.npmrc")).is_err());
+        // 大小写不敏感（Windows 语义）。
+        assert!(reject_overbroad_root(Path::new("C:/Users/alice/.SSH")).is_err());
+        // 正常的库路径仍然允许。
+        assert!(reject_overbroad_root(Path::new("C:/Users/alice/notes")).is_ok());
+        assert!(reject_overbroad_root(Path::new("/home/alice/notes")).is_ok());
+        // 仅仅是前缀相似的名字不受影响。
+        assert!(reject_overbroad_root(Path::new("C:/Users/alice/.ssh-notes")).is_ok());
+    }
+
+    #[test]
+    fn register_access_accepts_normal_path() {
+        let mut set = AccessSet::default();
+        let note = "C:/vault_markelle_unit_test/note.md".to_string();
+        register_paths(&mut set, std::slice::from_ref(&note)).unwrap();
+        assert!(set.is_allowed(Path::new(&note)));
+    }
+
+    #[test]
+    fn register_access_is_all_or_nothing() {
+        // 混合「有效 + 无效」输入时整体失败，且不留下任何已注册路径。
+        // 用一个真实存在的 `.ssh` 目录触发库分支的敏感目录拒绝。
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("mkl-acc-{}", std::process::id()));
+        let bad_dir = base.join(".ssh");
+        std::fs::create_dir_all(&bad_dir).unwrap();
+
+        let mut set = AccessSet::default();
+        let good = "C:/vault_markelle_unit_test/note.md".to_string();
+        let bad = bad_dir.to_string_lossy().to_string();
+        assert!(register_paths(&mut set, &[good, bad]).is_err());
+        assert!(set.vault_roots.is_empty(), "vault grant leaked");
+        assert!(set.files.is_empty(), "file grant leaked");
+        assert!(set.dirs.is_empty(), "dir grant leaked");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

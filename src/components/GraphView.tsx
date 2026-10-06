@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   forceCenter,
   forceCollide,
@@ -96,7 +96,71 @@ function folderCluster(folder: string): { cx: number; cy: number } {
   return { cx: a * 2 - 1, cy: b * 2 - 1 };
 }
 
-export function GraphView({
+/**
+ * Canvas palette. Kept in a ref that the long-lived draw loop reads at paint
+ * time, so a light/dark toggle can re-colour in place instead of tearing down
+ * and rebuilding the whole force simulation (which discarded the layout).
+ */
+interface GraphPalette {
+  isDark: boolean;
+  ink: string;
+  inkSoft: string;
+  accent: string;
+  baseFill: string;
+  orphanFill: string;
+  conflictFill: string;
+  linkDim: string;
+  linkHot: string;
+  linkMid: string;
+  paper: string;
+  halo: string;
+  ring: string;
+  vignetteEdge: string;
+  nodeStroke: string;
+  labelBg: string;
+}
+
+function graphPalette(dark: boolean): GraphPalette {
+  return dark
+    ? {
+        isDark: true,
+        ink: "rgba(242, 235, 223, 0.96)",
+        inkSoft: "rgba(181, 167, 147, 0.78)",
+        accent: "#e88a6a",
+        baseFill: "#8b7c68",
+        orphanFill: "rgba(139, 124, 104, 0.45)",
+        conflictFill: "#d9a05b",
+        linkDim: "rgba(181, 167, 147, 0.08)",
+        linkHot: "rgba(224, 112, 79, 0.5)",
+        linkMid: "rgba(181, 167, 147, 0.2)",
+        paper: "#1e1a14",
+        halo: "rgba(217, 160, 91, 0.18)",
+        ring: "rgba(242, 235, 223, 0.72)",
+        vignetteEdge: "rgba(0,0,0,0.28)",
+        nodeStroke: "rgba(8, 6, 4, 0.38)",
+        labelBg: "rgba(26, 22, 17, 0.9)",
+      }
+    : {
+        isDark: false,
+        ink: "rgba(32, 27, 21, 0.94)",
+        inkSoft: "rgba(107, 95, 80, 0.9)",
+        accent: "#a63d24",
+        baseFill: "#6b5f50",
+        orphanFill: "rgba(154, 139, 119, 0.42)",
+        conflictFill: "#8a6118",
+        linkDim: "rgba(56, 48, 38, 0.07)",
+        linkHot: "rgba(166, 61, 36, 0.42)",
+        linkMid: "rgba(56, 48, 38, 0.16)",
+        paper: "#f6f2e9",
+        halo: "rgba(150, 104, 29, 0.14)",
+        ring: "rgba(32, 27, 21, 0.5)",
+        vignetteEdge: "rgba(56,44,30,0.08)",
+        nodeStroke: "rgba(253, 251, 245, 0.7)",
+        labelBg: "rgba(253, 251, 245, 0.95)",
+      };
+}
+
+function GraphViewInner({
   vaultRoot,
   focusPath,
   mode,
@@ -123,6 +187,10 @@ export function GraphView({
   const [tipFollow, setTipFollow] = useState(false);
   const tipRef = useRef<HTMLDivElement>(null);
   const tipPosRef = useRef<{ x: number; y: number } | null>(null);
+  /** Canvas palette read by the draw loop; updated in place on theme change. */
+  const themeRef = useRef<GraphPalette>(graphPalette(dark));
+  /** Post-drag flag reset; tracked so it cannot fire after unmount. */
+  const dragResetTimerRef = useRef(0);
 
   const hoverIdRef = useRef<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
@@ -309,6 +377,14 @@ export function GraphView({
     };
   }, [vaultRoot, focusPath, mode, epoch, localHops, onBusy, onStatus]);
 
+  // Re-colour on theme change WITHOUT rebuilding the force simulation: update
+  // the palette ref the draw loop reads, then repaint the existing layout.
+  // Declared before the main effect so it runs first on mount.
+  useEffect(() => {
+    themeRef.current = graphPalette(dark);
+    kickDraw();
+  }, [dark, kickDraw]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     const stage = stageRef.current;
@@ -318,19 +394,8 @@ export function GraphView({
     let width = stage.clientWidth;
     let height = stage.clientHeight;
 
-    const ink = dark ? "rgba(242, 235, 223, 0.96)" : "rgba(32, 27, 21, 0.94)";
-    const inkSoft = dark ? "rgba(181, 167, 147, 0.78)" : "rgba(107, 95, 80, 0.9)";
-    const accent = dark ? "#e88a6a" : "#a63d24";
-    const baseFill = dark ? "#8b7c68" : "#6b5f50";
-    const orphanFill = dark ? "rgba(139, 124, 104, 0.45)" : "rgba(154, 139, 119, 0.42)";
-    const conflictFill = dark ? "#d9a05b" : "#8a6118";
-    const linkDim = dark ? "rgba(181, 167, 147, 0.08)" : "rgba(56, 48, 38, 0.07)";
-    const linkHot = dark ? "rgba(224, 112, 79, 0.5)" : "rgba(166, 61, 36, 0.42)";
-    const linkMid = dark ? "rgba(181, 167, 147, 0.2)" : "rgba(56, 48, 38, 0.16)";
-    const paper = dark ? "#1e1a14" : "#f6f2e9";
-    const halo = dark ? "rgba(217, 160, 91, 0.18)" : "rgba(150, 104, 29, 0.14)";
-    const ring = dark ? "rgba(242, 235, 223, 0.72)" : "rgba(32, 27, 21, 0.5)";
-
+    // Colours are read from the palette ref at paint time (see the theme
+    // effect above) so a dark/light toggle repaints without rebuilding `sim`.
     const saved = loadGraphLayout(vaultRoot, mode);
     const degree = buildDegreeMap(filtered.links);
     degreeRef.current = degree;
@@ -400,6 +465,21 @@ export function GraphView({
       needsDrawRef.current = false;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
+      const theme = themeRef.current;
+      const {
+        ink,
+        inkSoft,
+        accent,
+        baseFill,
+        orphanFill,
+        conflictFill,
+        linkDim,
+        linkHot,
+        linkMid,
+        paper,
+        halo,
+        ring,
+      } = theme;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, height);
       ctx.fillStyle = paper;
@@ -415,7 +495,7 @@ export function GraphView({
         Math.max(width, height) * 0.72,
       );
       grd.addColorStop(0, "rgba(0,0,0,0)");
-      grd.addColorStop(1, dark ? "rgba(0,0,0,0.28)" : "rgba(56,44,30,0.08)");
+      grd.addColorStop(1, theme.vignetteEdge);
       ctx.fillStyle = grd;
       ctx.fillRect(0, 0, width, height);
 
@@ -524,14 +604,14 @@ export function GraphView({
         if (n.isFocus) fill = accent;
         else if (n.kind === "orphan") fill = orphanFill;
         else if (n.kind === "conflict") fill = conflictFill;
-        else if (n.folder) fill = folderTint(n.folder, dark);
+        else if (n.folder) fill = folderTint(n.folder, theme.isDark);
 
         ctx.globalAlpha = dimmed ? 0.2 : 1;
         ctx.beginPath();
         ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
         ctx.fillStyle = fill;
         ctx.fill();
-        ctx.strokeStyle = dark ? "rgba(8, 6, 4, 0.38)" : "rgba(253, 251, 245, 0.7)";
+        ctx.strokeStyle = theme.nodeStroke;
         ctx.lineWidth = (n.id === hover ? 1.55 : 1) * inv;
         ctx.stroke();
 
@@ -565,7 +645,7 @@ export function GraphView({
         ctx.arcTo(bx, by + th, bx, by, rx);
         ctx.arcTo(bx, by, bx + tw, by, rx);
         ctx.closePath();
-        ctx.fillStyle = dark ? "rgba(26, 22, 17, 0.9)" : "rgba(253, 251, 245, 0.95)";
+        ctx.fillStyle = theme.labelBg;
         ctx.fill();
         ctx.font = font;
         ctx.textAlign = "center";
@@ -780,8 +860,10 @@ export function GraphView({
         n.fx = n.x ?? null;
         n.fy = n.y ?? null;
         persistLayout();
-        window.setTimeout(() => {
+        if (dragResetTimerRef.current) window.clearTimeout(dragResetTimerRef.current);
+        dragResetTimerRef.current = window.setTimeout(() => {
           draggedRef.current = false;
+          dragResetTimerRef.current = 0;
         }, 0);
       });
 
@@ -851,6 +933,10 @@ export function GraphView({
     return () => {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = 0;
+      if (dragResetTimerRef.current) {
+        window.clearTimeout(dragResetTimerRef.current);
+        dragResetTimerRef.current = 0;
+      }
       persistLayout();
       sim.stop();
       simRef.current = null;
@@ -864,10 +950,12 @@ export function GraphView({
       canvas.removeEventListener("dblclick", onDblClick);
       canvasSel.on(".zoom", null).on(".drag", null);
     };
+    // `dark` is intentionally NOT a dep: the palette ref (theme effect above)
+    // repaints in place so a theme toggle never rebuilds the simulation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, dark, vaultRoot, mode, filtered, setHover, setSelected, kickDraw]);
+  }, [data, vaultRoot, mode, filtered, setHover, setSelected, kickDraw]);
 
-  const fitView = () => {
+  const fitView = useCallback(() => {
     const canvas = canvasRef.current;
     const stage = stageRef.current;
     const zoomer = zoomerRef.current;
@@ -897,7 +985,7 @@ export function GraphView({
     select(canvas).call(zoomer.transform, transform);
     transformRef.current = transform;
     kickDraw();
-  };
+  }, [kickDraw]);
 
   const panToNode = useCallback(
     (id: string) => {
@@ -974,7 +1062,7 @@ export function GraphView({
         }
       }
     },
-    [zoomByFactor, moveSelection, selectedId],
+    [zoomByFactor, moveSelection, selectedId, fitView],
   );
 
   const relayout = () => {
@@ -1017,7 +1105,9 @@ export function GraphView({
       a.href = url;
       a.download = `markelle-graph-${mode}.png`;
       a.click();
-      URL.revokeObjectURL(url);
+      // Revoking synchronously can cancel the download before the WebView has
+      // started it — release later (same deferred pattern as downloadTextFile).
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     }, "image/png");
   };
 
@@ -1298,3 +1388,5 @@ export function GraphView({
     </div>
   );
 }
+
+export const GraphView = memo(GraphViewInner);

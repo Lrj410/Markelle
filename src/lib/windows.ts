@@ -2,7 +2,8 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 export async function openPathInNewWindow(path: string): Promise<void> {
   const name = path.split(/[/\\]/).pop() ?? "Markelle";
-  const label = `doc-${Date.now()}`;
+  // Suffix keeps labels unique when two opens land in the same millisecond.
+  const label = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const url = `/?file=${encodeURIComponent(path)}`;
 
   const win = new WebviewWindow(label, {

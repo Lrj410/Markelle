@@ -5,10 +5,21 @@ import { installEarlyOpenListeners } from "./lib/pendingOpen";
 
 void installEarlyOpenListeners();
 
-// Suppress WebView2 / Chromium default context menu (Inspect, Reload, etc.).
+// Suppress WebView2 / Chromium default context menu (Inspect, Reload, etc.),
+// but let the native menu through inside editable surfaces so the OS
+// spelling / emoji / paste menus still work (the app exposes a spellcheck
+// setting, so killing them here would contradict it).
 document.addEventListener(
   "contextmenu",
   (e) => {
+    const target = e.target as HTMLElement | null;
+    if (
+      target?.closest(
+        'input, textarea, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]',
+      )
+    ) {
+      return;
+    }
     e.preventDefault();
   },
   true,

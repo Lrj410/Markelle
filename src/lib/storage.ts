@@ -47,11 +47,42 @@ let persistChain: Promise<void> = Promise.resolve();
 /** Callers awaiting the next (shared) persist — settled together, never dropped. */
 let persistWaiters: Array<{ resolve: () => void; reject: (err: unknown) => void }> = [];
 
+/** Hard cap on queued waiters so a stalling `store.save()` cannot leak memory. */
+const MAX_PERSIST_WAITERS = 64;
+/** Reject a `store.save()` that never settles so callers/UI can react. */
+const PERSIST_TIMEOUT_MS = 8000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("store.save timed out")), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+function queueWaiter(resolve: () => void, reject: (err: unknown) => void): void {
+  persistWaiters.push({ resolve, reject });
+  if (persistWaiters.length > MAX_PERSIST_WAITERS) {
+    // Coalesce oldest: drop and resolve them (best-effort) rather than let the
+    // queue grow without bound while a save is stuck.
+    const overflow = persistWaiters.splice(0, persistWaiters.length - MAX_PERSIST_WAITERS);
+    for (const w of overflow) w.resolve();
+  }
+}
+
 function runPersist(): void {
   const waiters = persistWaiters;
   persistWaiters = [];
   persistChain = persistChain
-    .then(() => store.save())
+    .then(() => withTimeout(store.save(), PERSIST_TIMEOUT_MS))
     .then(() => {
       for (const w of waiters) w.resolve();
     })
@@ -62,7 +93,7 @@ function runPersist(): void {
 
 function schedulePersist(immediate = false): Promise<void> {
   return new Promise((resolve, reject) => {
-    persistWaiters.push({ resolve, reject });
+    queueWaiter(resolve, reject);
     if (immediate) {
       if (persistTimer != null) {
         clearTimeout(persistTimer);
@@ -89,7 +120,7 @@ export async function flushStore(): Promise<void> {
   persistWaiters = [];
   try {
     await persistChain;
-    await store.save();
+    await withTimeout(store.save(), PERSIST_TIMEOUT_MS);
     for (const w of waiters) w.resolve();
   } catch (err) {
     for (const w of waiters) w.reject(err);

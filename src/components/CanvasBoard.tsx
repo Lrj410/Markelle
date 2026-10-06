@@ -18,6 +18,7 @@ export function CanvasBoard({ open, initialJson, onClose, onSave }: Props) {
     initialJson ? parseCanvas(initialJson) : emptyCanvas(),
   );
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const dragOffset = useRef({ x: 0, y: 0 });
 
@@ -26,6 +27,7 @@ export function CanvasBoard({ open, initialJson, onClose, onSave }: Props) {
     setDoc(initialJson ? parseCanvas(initialJson) : emptyCanvas());
     setDragId(null);
     setSaving(false);
+    setSaveError(null);
   }, [open, initialJson]);
 
   useModalFocusTrap({
@@ -59,10 +61,15 @@ export function CanvasBoard({ open, initialJson, onClose, onSave }: Props) {
             onClick={() => {
               void (async () => {
                 setSaving(true);
+                setSaveError(null);
                 try {
                   const next = { ...doc, updatedAt: Date.now() };
                   await onSave(JSON.stringify(next, null, 2));
                   setDoc(next);
+                } catch (err) {
+                  // onSave can throw (e.g. no vault open); without this the
+                  // promise rejected unhandled and the spinner never resolved.
+                  setSaveError(err instanceof Error ? err.message : String(err));
                 } finally {
                   setSaving(false);
                 }
@@ -75,6 +82,19 @@ export function CanvasBoard({ open, initialJson, onClose, onSave }: Props) {
             {t("common.close")}
           </button>
         </div>
+        {saveError && (
+          <p
+            className="canvas-board-error"
+            role="alert"
+            style={{
+              margin: "0 12px 8px",
+              color: "var(--danger)",
+              fontSize: "0.85rem",
+            }}
+          >
+            {saveError}
+          </p>
+        )}
         <div
           className="canvas-board-stage"
           onPointerMove={(e) => {

@@ -566,7 +566,7 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                         { label: "Ollama (11434)", url: "http://127.0.0.1:11434" },
                         { label: "llama.cpp (8080)", url: "http://127.0.0.1:8080" },
                         { label: "LM Studio (1234)", url: "http://127.0.0.1:1234" },
-                        { label: "IPv6 本机 [::1]", url: "http://[::1]:11434" },
+                        { label: t("settings.presetIpv6"), url: "http://[::1]:11434" },
                       ].map((item) => (
                         <button
                           key={item.url}
@@ -576,7 +576,7 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                             settings.ollamaBaseUrl.startsWith(item.url) && "is-active",
                           )}
                           onClick={() => onChange({ ollamaBaseUrl: item.url })}
-                          title={`填入 ${item.url}`}
+                          title={t("settings.presetFill", { url: item.url })}
                         >
                           {item.label}
                         </button>
@@ -585,23 +585,21 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                   </div>
                 )}
                 <div className="ai-field-block" style={{ marginTop: 6 }}>
-                  <label className="ai-field-label">API 密钥 / Bearer Token (可选)</label>
-                  <span className="ai-field-desc">连接带有身份鉴权的私有大模型端点时填入</span>
+                  <label className="ai-field-label">{t("settings.ollamaApiKeyLabel")}</label>
+                  <span className="ai-field-desc">{t("settings.ollamaApiKeyDesc")}</span>
                   <input
                     type="password"
                     className="ai-field-input"
                     value={settings.ollamaApiKey || ""}
                     onChange={(e) => onChange({ ollamaApiKey: e.target.value })}
                     disabled={!settings.ollamaEnabled}
-                    placeholder="留空即表示无需鉴权密钥"
+                    placeholder={t("settings.ollamaApiKeyPlaceholder")}
                   />
                 </div>
                 <label className="settings-row settings-row-check" style={{ marginTop: 6 }}>
                   <span>
-                    允许局域网私有端点 (LAN Private IP)
-                    <em className="settings-row-desc">
-                      允许连接 192.168.x.x, 10.x.x.x, 172.16-31.x.x 等家庭 NAS 或内网 GPU 算力机
-                    </em>
+                    {t("settings.ollamaAllowLanLabel")}
+                    <em className="settings-row-desc">{t("settings.ollamaAllowLanDesc")}</em>
                   </span>
                   <input
                     type="checkbox"
@@ -640,7 +638,7 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                       >
                         {ollamaStatus.ok
                           ? t("settings.ollamaConnected", {
-                              provider: ollamaStatus.provider || "本地部署服务",
+                              provider: ollamaStatus.provider || t("settings.ollamaProviderFallback"),
                               count: String(ollamaStatus.models.length),
                             })
                           : ollamaStatus.error || t("settings.ollamaFailed")}
@@ -660,7 +658,7 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                           type="button"
                           className="settings-ollama-chip"
                           onClick={() => onChange({ ollamaModel: m })}
-                          title={`填入 ${m}`}
+                          title={t("settings.presetFill", { url: m })}
                         >
                           {m}
                         </button>
@@ -671,11 +669,9 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
 
                 {/* Context & Memory Fusion Engine Selection */}
                 <div className="settings-group-title" style={{ marginTop: 20 }}>
-                  上下文与记忆引擎 (Context & Memory Engine)
+                  {t("settings.engineHead")}
                 </div>
-                <p className="settings-group-desc">
-                  自由选择使用 Markelle 内置智能记忆引擎，还是接入外置强大的 CogniStack 上下文融合引擎。
-                </p>
+                <p className="settings-group-desc">{t("settings.engineDesc")}</p>
 
                 <div className="ai-engine-cards">
                   <div
@@ -691,12 +687,10 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                     }}
                   >
                     <div className="ai-engine-card-head">
-                      <span className="ai-engine-card-title">✨ Markelle 内置引擎</span>
-                      <span className="ai-engine-badge">原生零配置</span>
+                      <span className="ai-engine-card-title">{t("settings.engineBuiltinTitle")}</span>
+                      <span className="ai-engine-badge">{t("settings.engineBuiltinBadge")}</span>
                     </div>
-                    <p className="ai-engine-card-desc">
-                      多轮智能滑动窗口，内置 Markdown 代码块与段落完整性保护，纯本地极速计算，无需额外启动外部服务。
-                    </p>
+                    <p className="ai-engine-card-desc">{t("settings.engineBuiltinDesc")}</p>
                   </div>
 
                   <div
@@ -712,12 +706,10 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                     }}
                   >
                     <div className="ai-engine-card-head">
-                      <span className="ai-engine-card-title">🧠 CogniStack 融合引擎</span>
-                      <span className="ai-engine-badge">高级 Token 预算</span>
+                      <span className="ai-engine-card-title">{t("settings.engineCogniTitle")}</span>
+                      <span className="ai-engine-badge">{t("settings.engineCogniBadge")}</span>
                     </div>
-                    <p className="ai-engine-card-desc">
-                      外接 CogniStack 网关，支持复杂提示词装配、严格 Token 预算软裁剪、水位触发与长期记忆块闭环。
-                    </p>
+                    <p className="ai-engine-card-desc">{t("settings.engineCogniDesc")}</p>
                   </div>
                 </div>
 
@@ -725,12 +717,12 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                   <div className="ai-subpanel-card">
                     <div className="ai-subpanel-head">
                       <span className="ai-subpanel-title">
-                        <span>🔌</span> CogniStack 网关连接配置
+                        <span>🔌</span> {t("settings.cogniPanelTitle")}
                       </span>
                     </div>
 
                     <div className="ai-field-block">
-                      <label className="ai-field-label">CogniStack 网关地址 (URL)</label>
+                      <label className="ai-field-label">{t("settings.cogniUrlLabel")}</label>
                       <input
                         type="text"
                         className="ai-field-input"
@@ -741,11 +733,11 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                     </div>
 
                     <div className="settings-ollama-presets" style={{ marginTop: 0 }}>
-                      <span className="settings-ollama-models-lbl">一键填入网关预设：</span>
+                      <span className="settings-ollama-models-lbl">{t("settings.cogniPresetsLabel")}</span>
                       <div className="settings-ollama-model-chips">
                         {[
-                          { label: "⚡ 本机主网关 (127.0.0.1:7331)", url: "http://127.0.0.1:7331" },
-                          { label: "🌐 局域网端口 (127.0.0.1:7332)", url: "http://127.0.0.1:7332" },
+                          { label: t("settings.cogniPresetLocal"), url: "http://127.0.0.1:7331" },
+                          { label: t("settings.cogniPresetLan"), url: "http://127.0.0.1:7332" },
                         ].map((item) => (
                           <button
                             key={item.url}
@@ -755,7 +747,7 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                               settings.cogniStackUrl === item.url && "is-active",
                             )}
                             onClick={() => onChange({ cogniStackUrl: item.url })}
-                            title={`填入 ${item.url}`}
+                            title={t("settings.presetFill", { url: item.url })}
                           >
                             {item.label}
                           </button>
@@ -764,43 +756,43 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                     </div>
 
                     <div className="ai-field-block">
-                      <label className="ai-field-label">CogniStack 访问密钥 / Key (可选)</label>
-                      <span className="ai-field-desc">若网关启动时启用了 `--key` 或 `--local-key` 鉴权时填入</span>
+                      <label className="ai-field-label">{t("settings.cogniApiKeyLabel")}</label>
+                      <span className="ai-field-desc">{t("settings.cogniApiKeyDesc")}</span>
                       <input
                         type="password"
                         className="ai-field-input"
                         value={settings.cogniStackApiKey || ""}
                         onChange={(e) => onChange({ cogniStackApiKey: e.target.value })}
-                        placeholder="留空即表示无需密码鉴权"
+                        placeholder={t("settings.cogniApiKeyPlaceholder")}
                       />
                     </div>
 
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                       <div className="ai-field-block">
-                        <label className="ai-field-label">上下文总预算上限 (Tokens)</label>
+                        <label className="ai-field-label">{t("settings.cogniTokenLimitLabel")}</label>
                         <select
                           className="ai-field-input"
                           value={settings.cogniStackTokenLimit || 8192}
                           onChange={(e) => onChange({ cogniStackTokenLimit: Number(e.target.value) })}
                         >
-                          <option value={4096}>4,096 tokens (小型轻量)</option>
-                          <option value={8192}>8,192 tokens (标准推荐)</option>
-                          <option value={16384}>16,384 tokens (长文深度)</option>
-                          <option value={32768}>32,768 tokens (超大窗口)</option>
-                          <option value={65536}>65,536 tokens (极限容量)</option>
+                          <option value={4096}>{t("settings.cogniToken4096")}</option>
+                          <option value={8192}>{t("settings.cogniToken8192")}</option>
+                          <option value={16384}>{t("settings.cogniToken16384")}</option>
+                          <option value={32768}>{t("settings.cogniToken32768")}</option>
+                          <option value={65536}>{t("settings.cogniToken65536")}</option>
                         </select>
                       </div>
 
                       <div className="ai-field-block">
-                        <label className="ai-field-label">字数 Token 转换系数 (charsPerToken)</label>
+                        <label className="ai-field-label">{t("settings.cogniCharsPerTokenLabel")}</label>
                         <select
                           className="ai-field-input"
                           value={settings.cogniStackCharsPerToken || 2}
                           onChange={(e) => onChange({ cogniStackCharsPerToken: Number(e.target.value) })}
                         >
-                          <option value={1}>1.0（保守 1字=1token，严格防超顶）</option>
-                          <option value={2}>2.0（推荐 中英双语/笔记标准比）</option>
-                          <option value={3}>3.0（激进 英文/代码较多时选用）</option>
+                          <option value={1}>{t("settings.cogniCpt1")}</option>
+                          <option value={2}>{t("settings.cogniCpt2")}</option>
+                          <option value={3}>{t("settings.cogniCpt3")}</option>
                         </select>
                       </div>
                     </div>
@@ -812,13 +804,15 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                         disabled={testingCogni}
                         onClick={() => void handleTestCogni()}
                       >
-                        {testingCogni ? "正在测试 CogniStack..." : "测试 CogniStack 连接"}
+                        {testingCogni ? t("settings.cogniTesting") : t("settings.cogniTest")}
                       </button>
                       {cogniStatus?.tested && (
                         <span className={cogniStatus.ok ? "ollama-status-ok" : "ollama-status-err"}>
                           {cogniStatus.ok
-                            ? `✓ CogniStack 引擎在线 (v${cogniStatus.version || "1.3.0"})`
-                            : `✗ ${cogniStatus.error || "未在目标端口检测到服务"}`}
+                            ? t("settings.cogniOnline", { version: cogniStatus.version || "1.3.0" })
+                            : t("settings.cogniOffline", {
+                                error: cogniStatus.error || t("settings.cogniNoService"),
+                              })}
                         </span>
                       )}
                     </div>
@@ -827,12 +821,12 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
 
                 {/* Model parameters & System Prompt */}
                 <div className="settings-group-title" style={{ marginTop: 22 }}>
-                  AI 行为与模型微调 (Persona & Tuning)
+                  {t("settings.tuningHead")}
                 </div>
 
                 <div className="ai-field-block" style={{ marginTop: 8 }}>
-                  <label className="ai-field-label">系统角色设定 (System Prompt)</label>
-                  <span className="ai-field-desc">注入大模型顶部的全局指令，约束其回答格式与行文风格</span>
+                  <label className="ai-field-label">{t("settings.systemPromptLabel")}</label>
+                  <span className="ai-field-desc">{t("settings.systemPromptDesc")}</span>
                   <textarea
                     className="ai-field-input"
                     rows={3}
@@ -845,8 +839,8 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
 
                 <label className="settings-row" style={{ marginTop: 8 }}>
                   <span>
-                    发散度 / 温度 (Temperature)
-                    <em className="settings-row-desc">较低值结果更精确稳定（如纠错），较高值更有创意（如续写）</em>
+                    {t("settings.temperatureLabel")}
+                    <em className="settings-row-desc">{t("settings.temperatureDesc")}</em>
                   </span>
                   <div className="ai-range-wrap">
                     <input

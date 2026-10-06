@@ -14,7 +14,8 @@ import { renderMermaidBlocks } from "../lib/mermaid";
 import { collectNoteEmbedTargets, stripNoteEmbeds } from "../lib/embeds";
 import { collectMediaTargets, resolveMediaMap } from "../lib/mediaResolve";
 import { filesFromDataTransfer, isImageFile } from "../lib/attachments";
-import { formatBytes, readMarkdownFile } from "../lib/files";
+import { formatBytes, PREVIEW_PAGE_CHARS, readMarkdownFile, statMarkdownFile } from "../lib/files";
+import type { OpenedFile } from "../lib/files";
 import { isGatedAssetUrl, toGatedAssetUrl } from "../lib/assets";
 import { resolveWikiTarget, type VaultFile } from "../lib/vaultIndex";
 import { slicePreviewPage } from "../lib/previewPage";
@@ -38,7 +39,6 @@ interface Props {
   /** Settings attachment folder (vault-relative). */
   attachmentFolder?: string;
   layout: LayoutPreset;
-  fontSize: number;
   lineWidth: number;
   dark: boolean;
   vaultFiles?: VaultFile[];
@@ -46,8 +46,6 @@ interface Props {
   allowRemoteHttpMedia?: boolean;
   /** Bumps when vault index identity changes so wikilinks re-resolve. */
   vaultEpoch?: string;
-  /** Paginate preview for large files (never render full 1GB HTML). */
-  paged?: boolean;
   /** Native large-file configuration for streaming pages directly from Rust memmap store */
   largeDoc?: {
     path: string;
@@ -58,7 +56,6 @@ interface Props {
   onSwitchToSource?: () => void;
   onToc: (toc: TocItem[]) => void;
   onWikiOpen: (path: string, heading?: string, wikiTarget?: string) => void;
-  onWikiHover?: (target: string | null, clientX: number, clientY: number) => void;
   /** Toggle the n-th GFM task checkbox (0-based) in the source document. */
   onTaskToggle?: (index: number) => void;
   /** Read-mode paste: import images and append markdown snippets. */
@@ -71,6 +68,51 @@ function isAssetUrl(href: string): boolean {
   return isGatedAssetUrl(href);
 }
 
+/* --------------------------------------------------------------------------
+   Embedded-note render cache
+   --------------------------------------------------------------------------
+   Split-mode typing re-runs the embed effect on every keystroke. Each embed
+   used to be re-read from disk and re-rendered (renderMarkdown + KaTeX /
+   highlight), which hammered the disk and dropped frames. Cache the rendered
+   HTML keyed by the target's path + on-disk identity (mtime/size) + the render
+   context, so an unchanged embed is neither re-read nor re-rendered. Bounded
+   Map (LRU-ish), no new dependencies.
+   -------------------------------------------------------------------------- */
+const EMBED_HTML_CACHE_LIMIT = 50;
+const embedHtmlCache = new Map<string, { key: string; html: string }>();
+
+function readEmbedHtmlCache(path: string, key: string): string | null {
+  const hit = embedHtmlCache.get(path);
+  if (!hit || hit.key !== key) return null;
+  // Refresh recency so frequently-visible embeds survive eviction.
+  embedHtmlCache.delete(path);
+  embedHtmlCache.set(path, hit);
+  return hit.html;
+}
+
+function writeEmbedHtmlCache(path: string, key: string, html: string): void {
+  embedHtmlCache.delete(path);
+  embedHtmlCache.set(path, { key, html });
+  while (embedHtmlCache.size > EMBED_HTML_CACHE_LIMIT) {
+    const oldest = embedHtmlCache.keys().next().value;
+    if (oldest === undefined) break;
+    embedHtmlCache.delete(oldest);
+  }
+}
+
+/** Shallow string-record equality so an unchanged map does not trigger a render. */
+function sameStringRecord(
+  a: Record<string, string>,
+  b: Record<string, string>,
+): boolean {
+  const aKeys = Object.keys(a);
+  if (aKeys.length !== Object.keys(b).length) return false;
+  for (const key of aKeys) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
 function MarkdownViewInner({
   docKey,
   source,
@@ -78,22 +120,18 @@ function MarkdownViewInner({
   vaultRoot = null,
   attachmentFolder = "attachments",
   layout,
-  fontSize: _fontSize,
   lineWidth,
   dark,
   vaultFiles,
   allowRemoteHttpMedia = false,
   vaultEpoch,
-  paged = false,
   largeDoc,
   onSwitchToSource,
   onToc,
   onWikiOpen,
-  onWikiHover,
   onTaskToggle,
   onPasteImages,
 }: Props) {
-  void _fontSize;
   useLocale();
   const articleRef = useRef<HTMLElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -128,15 +166,43 @@ function MarkdownViewInner({
   useEffect(() => {
     setPage(1);
     setLargeDocLines(null);
-  }, [docKey, paged]);
+  }, [docKey]);
+
+  // Fast tab / panel switches can unmount mid-hover; clear the pending timer so
+  // it never calls setHoverPreview on a dead component.
+  useEffect(
+    () => () => {
+      if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   const LARGE_DOC_LINES_PER_PAGE = 400;
   const largeDocPath = largeDoc?.path;
   const largeDocTotalLines = largeDoc?.totalLines;
 
+  // Latest in-memory source, read by the paging effect WITHOUT making `source`
+  // a dependency. Page 1 is always served from memory (renderSource falls back
+  // to `source`), so the effect only needs to react to path/total/page changes —
+  // a keystroke must not re-issue a backend fetch.
+  const sourceRef = useRef(source);
+  useEffect(() => {
+    sourceRef.current = source;
+  });
+
   useEffect(() => {
     if (!largeDocPath) {
       setLargeDocLines(null);
+      return;
+    }
+    // Page 1 already lives in memory (the read seed / buffer): skip the
+    // redundant backend fetch and let `renderSource` supply the text.
+    if (page === 1 && sourceRef.current) {
+      setLargeDocLines((prev) => (prev === null ? prev : null));
+      setLargeDocLoading(false);
       return;
     }
     let cancelled = false;
@@ -144,12 +210,7 @@ function MarkdownViewInner({
     const startLine = (page - 1) * LARGE_DOC_LINES_PER_PAGE + 1;
     const count = Math.min(LARGE_DOC_LINES_PER_PAGE, Math.max(1, totalLines - startLine + 1));
 
-    if (page === 1 && source) {
-      setLargeDocLines((prev) => prev ?? { page: 1, text: source });
-    } else {
-      setLargeDocLoading(true);
-    }
-
+    setLargeDocLoading(true);
     largeFileLines(largeDocPath, startLine, count)
       .then((res) => {
         if (!cancelled && res.lines) {
@@ -164,11 +225,11 @@ function MarkdownViewInner({
     return () => {
       cancelled = true;
     };
-  }, [largeDocPath, largeDocTotalLines, page, source]);
+  }, [largeDocPath, largeDocTotalLines, page]);
 
-  const inMemoryPaged = !largeDoc && (paged || source.length > 200_000);
+  const inMemoryPaged = !largeDoc && source.length > PREVIEW_PAGE_CHARS;
   const inMemoryPageInfo = useMemo(
-    () => (inMemoryPaged ? slicePreviewPage(source, page, 200_000) : null),
+    () => (inMemoryPaged ? slicePreviewPage(source, page, PREVIEW_PAGE_CHARS) : null),
     [inMemoryPaged, source, page],
   );
 
@@ -192,8 +253,10 @@ function MarkdownViewInner({
     if (inMemoryPageInfo) {
       return inMemoryPageInfo.text;
     }
-    if (source.length > 2_000_000) {
-      return source.slice(0, 200_000);
+    // Same threshold as `inMemoryPaged` above (single source of truth), so the
+    // fallback slice can never disagree with the computed page count.
+    if (source.length > PREVIEW_PAGE_CHARS) {
+      return source.slice(0, PREVIEW_PAGE_CHARS);
     }
     return source;
   }, [largeDoc, largeDocLines, page, source, inMemoryPageInfo]);
@@ -202,11 +265,14 @@ function MarkdownViewInner({
     let cancelled = false;
     const targets = collectMediaTargets(renderSource);
     if (!targets.length || !baseDir) {
-      setMediaPaths({});
+      setMediaPaths((prev) => (Object.keys(prev).length ? {} : prev));
       return;
     }
     void resolveMediaMap(vaultRoot, baseDir, targets, attachmentFolder).then((map) => {
-      if (!cancelled) setMediaPaths(map);
+      if (cancelled) return;
+      // resolveMediaMap always returns a fresh object; without this check every
+      // run re-renders (and re-runs the embed effect that depends on mediaPaths).
+      setMediaPaths((prev) => (sameStringRecord(prev, map) ? prev : map));
     });
     return () => {
       cancelled = true;
@@ -216,10 +282,20 @@ function MarkdownViewInner({
   useEffect(() => {
     let cancelled = false;
     const targets = collectNoteEmbedTargets(renderSource);
-    if (!targets.length || !vaultFiles?.length || paged) {
+    if (!targets.length || !vaultFiles?.length) {
       setEmbedHtml((prev) => (Object.keys(prev).length ? {} : prev));
       return;
     }
+
+    // Nested embeds are rendered with this context, so a change to it must
+    // invalidate the HTML cache alongside the on-disk identity.
+    const mediaSig = Object.keys(mediaPaths)
+      .sort()
+      .map((key) => `${key}=${mediaPaths[key]}`)
+      .join(";");
+    const ctxSig = `${baseDir}|${vaultRoot ?? ""}|${allowRemoteHttpMedia ? 1 : 0}|${
+      vaultEpoch ?? ""
+    }|${mediaSig}`;
 
     void (async () => {
       const slice = targets.slice(0, 12);
@@ -228,7 +304,27 @@ function MarkdownViewInner({
           const file = resolveWikiTarget(target, vaultFiles);
           if (!file) return null;
           try {
-            const opened = await readMarkdownFile(file.path, false);
+            // Stat is cheap compared to a full read + renderMarkdown. Typing in
+            // split mode re-runs this effect per keystroke, so an embed whose
+            // mtime/size + context are unchanged is served from cache.
+            const stat = await statMarkdownFile(file.path).catch(() => null);
+            let opened: OpenedFile | null = null;
+            let mtimeMs: number;
+            let size: number;
+            if (stat) {
+              mtimeMs = stat.mtimeMs;
+              size = stat.size;
+            } else {
+              opened = await readMarkdownFile(file.path, false);
+              mtimeMs = opened.mtimeMs;
+              size = opened.size;
+            }
+
+            const cacheKey = `${file.path}|${mtimeMs}|${size}|${ctxSig}`;
+            const cached = readEmbedHtmlCache(file.path, cacheKey);
+            if (cached !== null) return [file.path, cached] as const;
+
+            if (!opened) opened = await readMarkdownFile(file.path, false);
             const nested = stripNoteEmbeds(opened.content);
             const { html: body } = renderMarkdown(nested, {
               baseDir: file.path.replace(/[/\\][^/\\]+$/, "") || baseDir,
@@ -238,6 +334,7 @@ function MarkdownViewInner({
               mediaPaths,
               allowRemoteHttpMedia,
             });
+            writeEmbedHtmlCache(file.path, cacheKey, body);
             return [file.path, body] as const;
           } catch {
             return null;
@@ -265,7 +362,15 @@ function MarkdownViewInner({
     return () => {
       cancelled = true;
     };
-  }, [renderSource, vaultFiles, vaultEpoch, baseDir, paged, mediaPaths, vaultRoot]);
+  }, [
+    renderSource,
+    vaultFiles,
+    vaultEpoch,
+    baseDir,
+    mediaPaths,
+    vaultRoot,
+    allowRemoteHttpMedia,
+  ]);
 
   const { html, toc } = useMemo(
     () =>
@@ -533,23 +638,31 @@ function MarkdownViewInner({
               ? [
                   {
                     id: "ai-summarize-sel",
-                    label: "✨ 总结所选内容 (AI Summarize)",
+                    label: t("ai.menuSummarize"),
                     onSelect: () => {
-                      window.dispatchEvent(new CustomEvent("markelle:open-ai"));
+                      window.dispatchEvent(
+                        new CustomEvent("markelle:ai-action", {
+                          detail: { action: "summarize" },
+                        }),
+                      );
                     },
                   },
                   {
                     id: "ai-translate-sel",
-                    label: "✨ 翻译所选文字 (AI Translate)",
+                    label: t("ai.menuTranslate"),
                     onSelect: () => {
-                      window.dispatchEvent(new CustomEvent("markelle:open-ai"));
+                      window.dispatchEvent(
+                        new CustomEvent("markelle:ai-action", {
+                          detail: { action: "translate" },
+                        }),
+                      );
                     },
                   },
                 ]
               : []),
             {
               id: "ai-panel",
-              label: "✨ 打开 AI 助手 (Alt+A)",
+              label: t("ai.menuOpen"),
               onSelect: () => {
                 window.dispatchEvent(new CustomEvent("markelle:open-ai"));
               },
@@ -581,8 +694,6 @@ function MarkdownViewInner({
           if (!link) return;
           const wikiTarget = link.getAttribute("data-target") || link.textContent || "";
           if (!wikiTarget) return;
-
-          if (onWikiHover) onWikiHover(wikiTarget, event.clientX, event.clientY);
 
           const isUnresolved = link.classList.contains("is-unresolved");
           const filePath = link.getAttribute("data-path");
@@ -623,7 +734,6 @@ function MarkdownViewInner({
         onMouseLeave={(event) => {
           const related = event.relatedTarget as HTMLElement | null;
           if (related?.closest(".wikilink") || related?.closest(".wiki-hover-preview")) return;
-          if (onWikiHover) onWikiHover(null, 0, 0);
           if (hoverTimerRef.current) {
             clearTimeout(hoverTimerRef.current);
             hoverTimerRef.current = null;
@@ -755,7 +865,11 @@ function MarkdownViewInner({
           >
             ×
           </button>
-          <img src={lightbox.src} alt={lightbox.alt} onClick={(e) => e.stopPropagation()} />
+          <img
+            src={lightbox.src}
+            alt={lightbox.alt || t("md.imagePreview")}
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       ) : null}
       {hoverPreview ? (

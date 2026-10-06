@@ -4,6 +4,20 @@
  */
 
 import type { ReaderSettings } from "./types";
+import { t } from "./i18n";
+
+/**
+ * Marker for errors raised after every endpoint attempt has been exhausted.
+ * Callers rethrow these unchanged instead of wrapping them in the generic
+ * "unreachable" message. Uses a class (not a message-substring check) so the
+ * user-facing text can be localised without coupling to Chinese literals.
+ */
+class LocalAiAttemptsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LocalAiAttemptsError";
+  }
+}
 
 // Loopback addresses: IPv4 127.0.0.1, localhost, IPv6 [::1]
 const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost|\[::1\]|localhost6)$/i;
@@ -21,11 +35,13 @@ export function assertAllowedUrl(baseUrl: string, allowLan = false): string {
     hostname = parsed.hostname;
     protocol = parsed.protocol.toLowerCase();
   } catch {
-    throw new Error(`AI 服务地址格式非法: "${baseUrl}"`);
+    throw new Error(t("ailib.badUrl", { url: baseUrl }));
   }
 
   if (protocol !== "http:" && protocol !== "https:") {
-    throw new Error(`AI 服务仅允许 http/https 协议，当前为: ${protocol || "未知"}`);
+    throw new Error(
+      t("ailib.badProtocol", { protocol: protocol || t("ailib.unknownProtocol") }),
+    );
   }
 
   // Strip brackets from IPv6 host if present
@@ -40,14 +56,10 @@ export function assertAllowedUrl(baseUrl: string, allowLan = false): string {
   }
 
   if (allowLan) {
-    throw new Error(
-      "本地/局域网 AI 仅允许连接本机 (127.0.0.1 / localhost / [::1]) 或局域网私有网段字面量 IP (192.168.x, 10.x, 172.16-31.x)",
-    );
+    throw new Error(t("ailib.lanOnlyHosts"));
   }
 
-  throw new Error(
-    "本地 AI 仅允许连接本机 (127.0.0.1 / localhost / [::1])。如需连接局域网主机，请在设置中开启“允许局域网私有端点”",
-  );
+  throw new Error(t("ailib.localOnly"));
 }
 
 /** Persist-safe URL check used by settings loader (never throws). */
@@ -149,7 +161,9 @@ function mergeAbortSignals(
   let timer: ReturnType<typeof setTimeout> | null = null;
   if (timeoutMs > 0) {
     timer = setTimeout(() => {
-      const timeoutErr = new Error(`AI 请求超时（${Math.round(timeoutMs / 1000)}s）`);
+      const timeoutErr = new Error(
+        t("ailib.timeout", { seconds: Math.round(timeoutMs / 1000) }),
+      );
       timeoutErr.name = "AbortError";
       ctrl.abort(timeoutErr);
     }, timeoutMs);
@@ -173,7 +187,7 @@ async function consumeSseStream(
 ): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) {
-    throw new Error("响应不支持流式读取 (Response body is null)");
+    throw new Error(t("ailib.noStream"));
   }
 
   const decoder = new TextDecoder("utf-8");
@@ -283,7 +297,7 @@ export async function ollamaGenerate(
     }
 
     if (messages.length === 0) {
-      throw new Error("AI 请求缺少有效提示词或对话消息");
+      throw new Error(t("ailib.emptyPrompt"));
     }
 
     const defaultHeaders: Record<string, string> = {
@@ -327,14 +341,17 @@ export async function ollamaGenerate(
           },
         );
         if (fullText.trim()) return fullText.trim();
-        errors.push("OpenAI 兼容接口返回空内容");
+        errors.push(t("ailib.diagOpenAiEmpty"));
       } else {
         const errorText = await res.text().catch(() => "");
-        errors.push(`OpenAI 兼容接口 HTTP ${res.status}${errorText ? `: ${errorText.slice(0, 120)}` : ""}`);
+        errors.push(
+          t("ailib.diagOpenAiHttp", { status: res.status }) +
+            (errorText ? `: ${errorText.slice(0, 120)}` : ""),
+        );
       }
     } catch (err: unknown) {
       if (mergedSignal.aborted || isAbortError(err)) throw err;
-      errors.push(`OpenAI 兼容接口: ${shortErr(err)}`);
+      errors.push(t("ailib.diagOpenAiErr", { error: shortErr(err) }));
     }
 
     // Fallback prompt text for non-chat endpoints
@@ -376,13 +393,13 @@ export async function ollamaGenerate(
           },
         );
         if (fullText.trim()) return fullText.trim();
-        errors.push("llama.cpp /completion 返回空内容");
+        errors.push(t("ailib.diagLlamaEmpty"));
       } else {
-        errors.push(`llama.cpp /completion HTTP ${res.status}`);
+        errors.push(t("ailib.diagLlamaHttp", { status: res.status }));
       }
     } catch (err: unknown) {
       if (mergedSignal.aborted || isAbortError(err)) throw err;
-      errors.push(`llama.cpp /completion: ${shortErr(err)}`);
+      errors.push(t("ailib.diagLlamaErr", { error: shortErr(err) }));
     }
 
     // 3. Try Ollama native chat (/api/chat) — preserves multi-turn roles
@@ -417,13 +434,13 @@ export async function ollamaGenerate(
           },
         );
         if (fullText.trim()) return fullText.trim();
-        errors.push("Ollama /api/chat 返回空内容");
+        errors.push(t("ailib.diagOllamaChatEmpty"));
       } else {
-        errors.push(`Ollama /api/chat HTTP ${res.status}`);
+        errors.push(t("ailib.diagOllamaChatHttp", { status: res.status }));
       }
     } catch (err: unknown) {
       if (mergedSignal.aborted || isAbortError(err)) throw err;
-      errors.push(`Ollama /api/chat: ${shortErr(err)}`);
+      errors.push(t("ailib.diagOllamaChatErr", { error: shortErr(err) }));
     }
 
     // 4. Try Ollama native generate (/api/generate)
@@ -443,9 +460,12 @@ export async function ollamaGenerate(
 
       if (!res.ok) {
         const errorText = await res.text().catch(() => "");
-        errors.push(`Ollama /api/generate HTTP ${res.status}${errorText ? `: ${errorText.slice(0, 120)}` : ""}`);
-        throw new Error(
-          `本地 AI 服务请求失败。尝试路径均未成功：\n- ${errors.join("\n- ")}`,
+        errors.push(
+          t("ailib.diagOllamaGenHttp", { status: res.status }) +
+            (errorText ? `: ${errorText.slice(0, 120)}` : ""),
+        );
+        throw new LocalAiAttemptsError(
+          `${t("ailib.attemptsFailed")}\n- ${errors.join("\n- ")}`,
         );
       }
 
@@ -463,17 +483,16 @@ export async function ollamaGenerate(
       );
 
       if (fullText.trim()) return fullText.trim();
-      errors.push("Ollama /api/generate 返回空内容");
-      throw new Error(
-        `本地 AI 返回空结果。请确认模型已加载。诊断：\n- ${errors.join("\n- ")}`,
+      errors.push(t("ailib.diagOllamaGenEmpty"));
+      throw new LocalAiAttemptsError(
+        `${t("ailib.emptyResult")}\n- ${errors.join("\n- ")}`,
       );
     } catch (err: unknown) {
       if (mergedSignal.aborted || isAbortError(err)) throw err;
-      if (err instanceof Error && err.message.includes("尝试路径均未成功")) throw err;
-      if (err instanceof Error && err.message.includes("返回空结果")) throw err;
-      errors.push(`Ollama /api/generate: ${shortErr(err)}`);
+      if (err instanceof LocalAiAttemptsError) throw err;
+      errors.push(t("ailib.diagOllamaGenErr", { error: shortErr(err) }));
       throw new Error(
-        `本地 AI 服务不可达。请检查 llama.cpp / Ollama / LM Studio 是否启动。\n- ${errors.join("\n- ")}`,
+        `${t("ailib.unreachable")}\n- ${errors.join("\n- ")}`,
       );
     }
   } finally {
@@ -552,7 +571,7 @@ export async function ollamaCheckConnection(
               ? "LM Studio"
               : base.includes("11434")
                 ? "Ollama"
-                : "本地/局域网服务";
+                : t("ailib.providerLocalLan");
           return { ok: true, models, provider };
         }
       } catch {
@@ -594,7 +613,7 @@ export async function ollamaCheckConnection(
       }
 
       clearTimeout(timer);
-      return { ok: false, models: [], error: "未检测到服务运行或端口不可达" };
+      return { ok: false, models: [], error: t("ailib.noService") };
     } finally {
       clearTimeout(timer);
     }
