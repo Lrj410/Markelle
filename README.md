@@ -58,7 +58,7 @@
 
 ### 插件与壳层
 - 内置：沉浸阅读、羊皮纸主题
-- 用户 / 库级 **CSS 插件**（无任意 JS）；库级 `.markelle/style.css`
+- 用户 / 库级 **CSS 插件**（无任意 JS）
 - 无边框标题栏、系统托盘、关窗到托盘、启动恢复信任库
 
 ---
@@ -75,8 +75,6 @@
 
 1. 资源管理器中右键任意 `.md` →「打开方式」应能看到 Markelle  
 2. 双击 `.md` 应启动并打开该文件  
-
-发行物为 **Windows x64 NSIS**。从源码也可按 Tauri 文档在其他平台打包，但官方 Release 目前只发布 Windows 安装包。
 
 ---
 
@@ -133,24 +131,6 @@ npm run tauri build
 | `Esc` | 退出沉浸 / 中止 AI 生成 |
 
 macOS 上多数 `Ctrl` 对应 `⌘`（若自行构建）。
-
----
-
-## 安全要点（摘要）
-
-- 读写路径经 Rust **访问白名单**；符号链接拒绝
-- 本地媒体走 `mklasset`，每次请求校验 ACL；拒 SVG
-- Markdown `html: false`；链接 default-deny；剥离 `file:`；插件 CSS 拦截 `@import` / 远程 `url()`
-- 本地 AI / CogniStack 仅允许本机或显式开启的局域网私有网段
-- 详情：[SECURITY.md](./SECURITY.md)
-
----
-
-## 版本与路线
-
-当前版本 **0.1.0**。完整变更见 [CHANGELOG.md](./CHANGELOG.md)。
-
-后续可能：跨平台官方包、多库工作区增强。明确**不做**云同步 / 协作。
 
 ---
 
