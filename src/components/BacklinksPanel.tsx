@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { findBacklinks, type BacklinkHit } from "../lib/vault";
 import { t } from "../lib/i18n";
 import { useLocale } from "../hooks/useLocale";
+import { EmptyState } from "./ui/EmptyState";
 
 interface Props {
   vaultRoot: string | null;
@@ -55,8 +56,8 @@ export function BacklinksPanel({ vaultRoot, notePath, onOpenFile }: Props) {
 
   if (!vaultRoot || !notePath) {
     return (
-      <aside className="backlinks-panel dock-fill" aria-label={t("backlinks.label")}>
-        <p className="backlinks-empty">{t("backlinks.needNote")}</p>
+      <aside className="backlinks-panel panel-shell dock-fill" aria-label={t("backlinks.label")}>
+        <EmptyState>{t("backlinks.needNote")}</EmptyState>
       </aside>
     );
   }
@@ -66,18 +67,20 @@ export function BacklinksPanel({ vaultRoot, notePath, onOpenFile }: Props) {
     notePath.split(/[/\\]/).pop()?.replace(/\.md$/i, "") ?? "note";
 
   return (
-    <aside className="backlinks-panel dock-fill" aria-label={t("backlinks.label")}>
-      {loading && stale && <p className="backlinks-empty quiet">{t("backlinks.updating")}</p>}
-      {error && !loading && (
-        <p className="backlinks-empty">{t("error.fallback")}</p>
+    <aside className="backlinks-panel panel-shell dock-fill" aria-label={t("backlinks.label")}>
+      {loading && stale && (
+        <EmptyState quiet busy>
+          {t("backlinks.updating")}
+        </EmptyState>
       )}
+      {error && !loading && <EmptyState>{t("error.fallback")}</EmptyState>}
       {!loading && !error && hits.length === 0 && (
-        <p className="backlinks-empty">{t("backlinks.empty", { stem: noteStem })}</p>
+        <EmptyState>{t("backlinks.empty", { stem: noteStem })}</EmptyState>
       )}
       {hits.length > 0 && (
-        <div className="backlinks-head">
+        <div className="panel-list-head backlinks-head">
           {t("backlinks.head")}
-          {stale ? "…" : ""}
+          {stale ? ` · ${t("common.loading")}` : ""}
         </div>
       )}
       {hits.map((hit) => (

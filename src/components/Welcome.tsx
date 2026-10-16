@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import type { RecentEntry } from "../lib/types";
 import { t } from "../lib/i18n";
 import { useLocale } from "../hooks/useLocale";
+import { formatChord } from "../lib/modKey";
 
 interface Props {
   recent: RecentEntry[];
@@ -100,7 +101,7 @@ export function Welcome({
                 <span className="welcome-card-title">{t("welcome.openFile")}</span>
                 <span className="welcome-card-hint">{t("welcome.openFileHint")}</span>
               </div>
-              <kbd className="welcome-card-kbd">Ctrl+O</kbd>
+              <kbd className="welcome-card-kbd">{formatChord("O")}</kbd>
             </button>
 
             <button
@@ -118,7 +119,7 @@ export function Welcome({
                 <span className="welcome-card-title">{t("welcome.openVault")}</span>
                 <span className="welcome-card-hint">{t("welcome.openVaultHint")}</span>
               </div>
-              <kbd className="welcome-card-kbd">Ctrl+Shift+O</kbd>
+              <kbd className="welcome-card-kbd">{formatChord("Shift", "O")}</kbd>
             </button>
 
             {onNewNote && (
@@ -137,7 +138,7 @@ export function Welcome({
                   <span className="welcome-card-title">{t("welcome.newNote")}</span>
                   <span className="welcome-card-hint">{t("welcome.newNoteHint")}</span>
                 </div>
-                <kbd className="welcome-card-kbd">Ctrl+N</kbd>
+                <kbd className="welcome-card-kbd">{formatChord("N")}</kbd>
               </button>
             )}
 
@@ -158,7 +159,7 @@ export function Welcome({
                   <span className="welcome-card-title">{t("welcome.commandPalette")}</span>
                   <span className="welcome-card-hint">{t("welcome.cmdHint")}</span>
                 </div>
-                <kbd className="welcome-card-kbd">Ctrl+K</kbd>
+                <kbd className="welcome-card-kbd">{formatChord("K")}</kbd>
               </button>
             )}
           </div>

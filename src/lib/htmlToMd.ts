@@ -18,6 +18,28 @@ function decodeHtmlEntities(str: string): string {
 export function htmlToMarkdown(html: string): string {
   if (!html || typeof html !== "string") return "";
 
+  const codeBlocks: string[] = [];
+  const inlineCodes: string[] = [];
+
+  let s = convert(html, codeBlocks, inlineCodes);
+
+  // Restore inline code & code blocks at top-level
+  s = s.replace(/@@MKL_INLINE_CODE_(\d+)@@/g, (_, idx) => inlineCodes[Number(idx)] ?? "");
+  s = s.replace(/^([ \t]*>(?:[ \t]*>)*[ \t]*)?@@MKL_CODE_BLOCK_(\d+)@@/gm, (_, quotePrefix, idx) => {
+    const block = codeBlocks[Number(idx)] ?? "";
+    if (!quotePrefix) return block;
+    return block
+      .split("\n")
+      .map((line) => (line.length ? `${quotePrefix}${line}` : quotePrefix.trimEnd()))
+      .join("\n");
+  });
+  s = s.replace(/@@MKL_CODE_BLOCK_(\d+)@@/g, (_, idx) => codeBlocks[Number(idx)] ?? "");
+
+  // Normalize multi-newlines
+  return s.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function convert(html: string, codeBlocks: string[], inlineCodes: string[]): string {
   let s = html
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
@@ -28,6 +50,29 @@ export function htmlToMarkdown(html: string): string {
     .replace(/<link\b[^>]*>/gi, "")
     .replace(/<!--[\s\S]*?-->/g, "");
 
+  // Code blocks: <pre><code ...>...</code></pre>
+  s = s.replace(/<pre\b[^>]*><code(?:\s+class="[^"]*(?:lang|language)-(\w+)[^"]*")?[^>]*>([\s\S]*?)<\/code><\/pre>/gi, (_, lang, code) => {
+    const l = lang || "";
+    const decoded = decodeHtmlEntities(stripTags(code)).replace(/\n$/, "");
+    const idx = codeBlocks.length;
+    codeBlocks.push(`\`\`\`${l}\n${decoded}\n\`\`\``);
+    return `\n\n@@MKL_CODE_BLOCK_${idx}@@\n\n`;
+  });
+  s = s.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_, code) => {
+    const decoded = decodeHtmlEntities(stripTags(code)).replace(/\n$/, "");
+    const idx = codeBlocks.length;
+    codeBlocks.push(`\`\`\`\n${decoded}\n\`\`\``);
+    return `\n\n@@MKL_CODE_BLOCK_${idx}@@\n\n`;
+  });
+
+  // Inline code
+  s = s.replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_, c) => {
+    const decoded = decodeHtmlEntities(stripTags(c));
+    const idx = inlineCodes.length;
+    inlineCodes.push(`\`${decoded}\``);
+    return `@@MKL_INLINE_CODE_${idx}@@`;
+  });
+
   // Headings
   s = s.replace(/<h1\b[^>]*>([\s\S]*?)<\/h1>/gi, (_, c) => `\n\n# ${stripTags(c).trim()}\n\n`);
   s = s.replace(/<h2\b[^>]*>([\s\S]*?)<\/h2>/gi, (_, c) => `\n\n## ${stripTags(c).trim()}\n\n`);
@@ -36,26 +81,9 @@ export function htmlToMarkdown(html: string): string {
   s = s.replace(/<h5\b[^>]*>([\s\S]*?)<\/h5>/gi, (_, c) => `\n\n##### ${stripTags(c).trim()}\n\n`);
   s = s.replace(/<h6\b[^>]*>([\s\S]*?)<\/h6>/gi, (_, c) => `\n\n###### ${stripTags(c).trim()}\n\n`);
 
-  // Code blocks: <pre><code ...>...</code></pre>
-  s = s.replace(/<pre\b[^>]*><code(?:\s+class="[^"]*(?:lang|language)-(\w+)[^"]*")?[^>]*>([\s\S]*?)<\/code><\/pre>/gi, (_, lang, code) => {
-    const l = lang || "";
-    const decoded = decodeHtmlEntities(stripTags(code)).replace(/\n$/, "");
-    return `\n\n\`\`\`${l}\n${decoded}\n\`\`\`\n\n`;
-  });
-  s = s.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_, code) => {
-    const decoded = decodeHtmlEntities(stripTags(code)).replace(/\n$/, "");
-    return `\n\n\`\`\`\n${decoded}\n\`\`\`\n\n`;
-  });
-
-  // Inline code
-  s = s.replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_, c) => {
-    const decoded = decodeHtmlEntities(stripTags(c));
-    return `\`${decoded}\``;
-  });
-
   // Blockquotes
   s = s.replace(/<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, c) => {
-    const inner = htmlToMarkdown(c).trim();
+    const inner = convert(c, codeBlocks, inlineCodes).trim();
     const quoted = inner.split("\n").map((line) => `> ${line}`).join("\n");
     return `\n\n${quoted}\n\n`;
   });
@@ -115,10 +143,7 @@ export function htmlToMarkdown(html: string): string {
 
   // Divs / Spans / remaining tags
   s = stripTags(s);
-  s = decodeHtmlEntities(s);
-
-  // Normalize multi-newlines
-  return s.replace(/\n{3,}/g, "\n\n").trim();
+  return decodeHtmlEntities(s);
 }
 
 function stripTags(html: string): string {

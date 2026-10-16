@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   cogniStackCheckHealth,
   cogniStackPrepare,
+  cogniStackFit,
   buildCogniStackSummarizePrompt,
   parseStructuredCogniStackSummary,
   formatCogniStackTranscript,
+  canonicalColumnTitle,
   COGNISTACK_MEMORY_COLUMNS,
 } from "./cognistack";
 
@@ -19,10 +21,23 @@ describe("cognistack client module", () => {
     const res = await cogniStackPrepare({
       url: "http://127.0.0.1:59999",
       dialogue: [{ role: "user", content: "hello" }],
+      profile: { name: "Test Assistant" },
+      loreEntries: [{ id: "l1", content: "knowledge", keys: ["k1"] }],
+      vectorHits: [{ name: "v1", content: "vector text" }],
     });
     expect(res.ok).toBe(false);
     expect(res.messages).toEqual([{ role: "user", content: "hello" }]);
     expect(res.error).toContain("CogniStack 调用失败");
+  });
+
+  it("handles fit error gracefully on dead endpoint", async () => {
+    const res = await cogniStackFit({
+      url: "http://127.0.0.1:59999",
+      messages: [{ role: "user", content: "hello" }],
+    });
+    expect(res.ok).toBe(false);
+    expect(res.messages).toEqual([{ role: "user", content: "hello" }]);
+    expect(res.error).toBeDefined();
   });
 
   it("formats dialogue transcript correctly", () => {
@@ -47,6 +62,38 @@ describe("cognistack client module", () => {
     expect(prompt).toContain("已有长期记忆摘要");
     expect(prompt).toContain("本批新对话");
     expect(prompt).toContain("600 字以内");
+  });
+
+  it("resolves canonical column titles and CogniStack 1.4.0 aliases", () => {
+    expect(canonicalColumnTitle("【硬事实】")).toBe("【硬事实】");
+    expect(canonicalColumnTitle("【核心事实】")).toBe("【硬事实】");
+    expect(canonicalColumnTitle("【长期事实】")).toBe("【硬事实】");
+    expect(canonicalColumnTitle("【事件时间线】")).toBe("【时间线】");
+    expect(canonicalColumnTitle("【人物关系】")).toBe("【关系与称呼】");
+    expect(canonicalColumnTitle("【未决事项】")).toBe("【未决】");
+    expect(canonicalColumnTitle("【最近情节】")).toBe("【近期情节】");
+    expect(canonicalColumnTitle("【未知栏目】")).toBeNull();
+  });
+
+  it("normalizes markdown headers and brackets into canonical five-part layout", () => {
+    const raw = [
+      "### 硬事实: 显卡为 RTX 5090",
+      "## 事件时间线",
+      "2026年完成系统升级",
+      "[人物关系]",
+      "张三为系统管理员",
+      "【未决事项】",
+      "显卡供电线尚未插紧",
+      "### 最近情节",
+      "刚刚进行了基准测试",
+    ].join("\n");
+
+    const cleaned = parseStructuredCogniStackSummary(raw);
+    expect(cleaned).toContain("【硬事实】\n显卡为 RTX 5090");
+    expect(cleaned).toContain("【时间线】\n2026年完成系统升级");
+    expect(cleaned).toContain("【关系与称呼】\n张三为系统管理员");
+    expect(cleaned).toContain("【未决】\n显卡供电线尚未插紧");
+    expect(cleaned).toContain("【近期情节】\n刚刚进行了基准测试");
   });
 
   it("parses structured summary and strips machine blocks if present", () => {
@@ -103,5 +150,3 @@ describe("cognistack client module", () => {
     expect(droppedCount).toBe(26);
   });
 });
-
-

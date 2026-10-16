@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { formatDateYmd, dailyNotePath } from "../lib/templates";
 import { t } from "../lib/i18n";
 import { useLocale } from "../hooks/useLocale";
+import { EmptyState } from "./ui/EmptyState";
 
 interface Props {
   vaultRoot: string | null;
@@ -59,14 +60,14 @@ export function CalendarPanel({
 
   if (!vaultRoot) {
     return (
-      <aside className="backlinks-panel dock-fill" aria-label={t("panel.calendar")}>
-        <p className="backlinks-empty">{t("vault.needOpen")}</p>
+      <aside className="panel-shell dock-fill" aria-label={t("panel.calendar")}>
+        <EmptyState>{t("vault.needOpen")}</EmptyState>
       </aside>
     );
   }
 
   return (
-    <aside className="backlinks-panel dock-fill calendar-panel" aria-label={t("panel.calendar")}>
+    <aside className="panel-shell dock-fill calendar-panel" aria-label={t("panel.calendar")}>
       <div className="calendar-nav">
         <button
           type="button"

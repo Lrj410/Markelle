@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { t } from "../lib/i18n";
 import { useLocale } from "../hooks/useLocale";
-import { useModalFocusTrap } from "../hooks/useModalFocusTrap";
+import { Modal } from "./ui/Modal";
+import { Button } from "./ui/Button";
 
 interface Props {
   open: boolean;
@@ -15,18 +16,10 @@ export function CaptureDialog({ open, onClose, onSave }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const titleId = useId();
-  const panelRef = useRef<HTMLDivElement>(null);
   const textRef = useRef(text);
   const savingRef = useRef(saving);
   textRef.current = text;
   savingRef.current = saving;
-
-  useModalFocusTrap({
-    active: open,
-    containerRef: panelRef,
-    onEscape: onClose,
-    initialFocusSelector: ".capture-input",
-  });
 
   useEffect(() => {
     if (!open) return;
@@ -58,8 +51,6 @@ export function CaptureDialog({ open, onClose, onSave }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose, onSave]);
 
-  if (!open) return null;
-
   const submit = async () => {
     const body = text.trim();
     if (!body || saving) return;
@@ -76,44 +67,45 @@ export function CaptureDialog({ open, onClose, onSave }: Props) {
   };
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby={titleId}>
-      <button type="button" className="modal-backdrop" onClick={onClose} aria-label={t("common.close")} />
-      <div className="modal-panel capture-panel" ref={panelRef}>
-        <div className="modal-head">
-          <h2 id={titleId}>{t("capture.title")}</h2>
-          <button type="button" className="settings-close" onClick={onClose} aria-label={t("common.close")}>
-            ×
-          </button>
-        </div>
-        <textarea
-          className="capture-input"
-          autoFocus
-          rows={6}
-          value={text}
-          placeholder={t("capture.placeholder")}
-          onChange={(e) => setText(e.target.value)}
-        />
-        {error ? (
-          <p className="settings-hint" role="alert" style={{ color: "var(--danger, #b4452b)" }}>
-            {error}
-          </p>
-        ) : (
-          <p className="settings-hint">{t("capture.hint")}</p>
-        )}
-        <div className="about-actions">
-          <button type="button" className="btn ghost" onClick={onClose}>
-            {t("common.close")}
-          </button>
-          <button
-            type="button"
-            className="btn primary"
-            disabled={!text.trim() || saving}
-            onClick={() => void submit()}
-          >
-            {t("capture.save")}
-          </button>
-        </div>
+    <Modal
+      open={open}
+      onClose={onClose}
+      titleId={titleId}
+      panelClassName="capture-panel"
+      initialFocusSelector=".capture-input"
+    >
+      <div className="modal-head">
+        <h2 id={titleId}>{t("capture.title")}</h2>
+        <button type="button" className="settings-close" onClick={onClose} aria-label={t("common.close")}>
+          ×
+        </button>
       </div>
-    </div>
+      <textarea
+        className="capture-input"
+        rows={6}
+        value={text}
+        placeholder={t("capture.placeholder")}
+        onChange={(e) => setText(e.target.value)}
+      />
+      {error ? (
+        <p className="settings-hint form-error" role="alert">
+          {error}
+        </p>
+      ) : (
+        <p className="settings-hint">{t("capture.hint")}</p>
+      )}
+      <div className="about-actions">
+        <Button variant="ghost" onClick={onClose}>
+          {t("common.close")}
+        </Button>
+        <Button
+          variant="primary"
+          disabled={!text.trim() || saving}
+          onClick={() => void submit()}
+        >
+          {t("capture.save")}
+        </Button>
+      </div>
+    </Modal>
   );
 }

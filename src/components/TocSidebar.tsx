@@ -71,6 +71,7 @@ export function TocSidebar({
                   active: item.id === activeId,
                 })}
                 title={item.text}
+                aria-current={item.id === activeId ? "location" : undefined}
                 onClick={() => onJump(item.id)}
               >
                 {item.text}

@@ -1,17 +1,40 @@
 import { basename } from "./paths";
 
+function stripMdExt(path: string): string {
+  return path.replace(/\.(md|markdown)$/i, "");
+}
+
+function normalizeSlash(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
 /**
  * Refactors `[[wikilink]]` and `![[embed]]` references in Markdown text
- * when a note's stem (filename without .md) changes.
+ * when a note's stem (filename without .md) or path changes.
  */
 export function refactorWikilinks(
   content: string,
   oldStem: string,
   newStem: string,
+  oldRelPath?: string,
+  newRelPath?: string,
 ): string {
-  if (!oldStem || !newStem || oldStem === newStem) return content;
+  if (!content) return "";
+  const oldStemNorm = (oldStem || "").trim();
+  const newStemNorm = (newStem || "").trim();
+  const oldPathStem = oldRelPath ? stripMdExt(normalizeSlash(oldRelPath)).trim() : "";
+  const newPathStem = newRelPath ? stripMdExt(normalizeSlash(newRelPath)).trim() : "";
 
-  const oldLower = oldStem.toLowerCase();
+  const hasPathChange =
+    Boolean(oldPathStem && newPathStem && oldPathStem.toLowerCase() !== newPathStem.toLowerCase());
+  const hasStemChange =
+    Boolean(oldStemNorm && newStemNorm && oldStemNorm.toLowerCase() !== newStemNorm.toLowerCase());
+
+  if (!hasPathChange && !hasStemChange) return content;
+
+  const oldLower = oldStemNorm.toLowerCase();
+  const oldPathLower = oldPathStem.toLowerCase();
+
   // Regex matches:
   // 1: (!?\[\[)
   // 2: target (non-empty, no ']', '#', '|', or newlines)
@@ -21,24 +44,40 @@ export function refactorWikilinks(
   const wikiRegex = /(!?\[\[)([^\]#|\r\n]+)(#[^\]|\r\n]*)?(\|[^\]\r\n]*)?(\]\])/g;
 
   return content.replace(wikiRegex, (match, prefix, target, heading, alias, suffix) => {
-    const trimmed = (target as string).trim();
-    const trimmedLower = trimmed.toLowerCase();
+    const rawTarget = target as string;
+    const trimmed = rawTarget.trim();
+    const trimmedNorm = normalizeSlash(trimmed);
+    const trimmedLower = trimmedNorm.toLowerCase();
 
-    const isExact = trimmedLower === oldLower;
-    const hasPathPrefix = trimmedLower.endsWith("/" + oldLower);
+    const leadingSpace = rawTarget.match(/^\s*/)?.[0] || "";
+    const trailingSpace = rawTarget.match(/\s*$/)?.[0] || "";
 
-    if (isExact) {
-      const leadingSpace = target.match(/^\s*/)?.[0] || "";
-      const trailingSpace = target.match(/\s*$/)?.[0] || "";
-      return `${prefix}${leadingSpace}${newStem}${trailingSpace}${heading || ""}${alias || ""}${suffix}`;
+    // 1. Check if target matches path-qualified stem (e.g. [[docs/Guide]] -> [[archive/Guide]])
+    if (hasPathChange) {
+      if (trimmedLower === oldPathLower) {
+        return `${prefix}${leadingSpace}${newPathStem}${trailingSpace}${heading || ""}${alias || ""}${suffix}`;
+      }
+      if (trimmedLower.endsWith("/" + oldPathLower)) {
+        const idx = trimmedLower.lastIndexOf("/" + oldPathLower);
+        const prefixDir = trimmed.slice(0, idx + 1);
+        return `${prefix}${leadingSpace}${prefixDir}${newPathStem}${trailingSpace}${heading || ""}${alias || ""}${suffix}`;
+      }
     }
 
-    if (hasPathPrefix) {
-      const idx = trimmed.lastIndexOf("/");
-      const dirPart = trimmed.slice(0, idx + 1);
-      const leadingSpace = target.match(/^\s*/)?.[0] || "";
-      const trailingSpace = target.match(/\s*$/)?.[0] || "";
-      return `${prefix}${leadingSpace}${dirPart}${newStem}${trailingSpace}${heading || ""}${alias || ""}${suffix}`;
+    // 2. If stem changed, check exact stem or stem with prefix
+    if (hasStemChange) {
+      const isExact = trimmedLower === oldLower;
+      const hasStemPrefix = trimmedLower.endsWith("/" + oldLower);
+
+      if (isExact) {
+        return `${prefix}${leadingSpace}${newStemNorm}${trailingSpace}${heading || ""}${alias || ""}${suffix}`;
+      }
+
+      if (hasStemPrefix) {
+        const idx = trimmed.lastIndexOf("/");
+        const dirPart = trimmed.slice(0, idx + 1);
+        return `${prefix}${leadingSpace}${dirPart}${newStemNorm}${trailingSpace}${heading || ""}${alias || ""}${suffix}`;
+      }
     }
 
     return match;
@@ -50,12 +89,18 @@ export function refactorWikilinks(
  */
 export function refactorMarkdownFileLinks(
   content: string,
-  oldFileName: string,
-  newFileName: string,
+  oldPathOrName: string,
+  newPathOrName: string,
 ): string {
-  if (!oldFileName || !newFileName || oldFileName === newFileName) return content;
+  if (!content || !oldPathOrName || !newPathOrName) return content;
+  const oldNorm = normalizeSlash(oldPathOrName.trim());
+  const newNorm = normalizeSlash(newPathOrName.trim());
+  if (oldNorm.toLowerCase() === newNorm.toLowerCase()) return content;
 
-  const oldDecoded = decodeURIComponent(oldFileName).toLowerCase();
+  const oldBase = basename(oldNorm);
+  const newBase = basename(newNorm);
+  const oldBaseDecoded = decodeURIComponent(oldBase).toLowerCase();
+
   // Match [text](path.md)
   const mdLinkRegex = /(\[[^\]]*\]\()([^)\r\n]+)(\))/g;
 
@@ -65,13 +110,32 @@ export function refactorMarkdownFileLinks(
     const rawPath = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
     const hash = hashIdx >= 0 ? href.slice(hashIdx) : "";
 
-    const decodedPath = decodeURIComponent(rawPath.trim());
-    const base = basename(decodedPath);
+    const decodedRaw = decodeURIComponent(rawPath.trim());
+    const decodedNorm = normalizeSlash(decodedRaw);
+    const decodedNormLower = decodedNorm.toLowerCase();
 
-    if (base.toLowerCase() === oldDecoded) {
+    // Check if link matches path suffix (e.g. href="docs/old.md" or "./docs/old.md" matching "docs/old.md")
+    if (oldNorm.includes("/")) {
+      const oldNormLower = oldNorm.toLowerCase();
+      if (decodedNormLower === oldNormLower) {
+        return `${prefix}${encodeURI(newNorm)}${hash}${suffix}`;
+      }
+      if (decodedNormLower.endsWith("/" + oldNormLower)) {
+        const idx = decodedNormLower.lastIndexOf("/" + oldNormLower);
+        const prefixDir = decodedNorm.slice(0, idx + 1);
+        return `${prefix}${prefixDir}${encodeURI(newNorm)}${hash}${suffix}`;
+      }
+      if (decodedNormLower.startsWith("./") && decodedNormLower.slice(2) === oldNormLower) {
+        return `${prefix}./${encodeURI(newNorm)}${hash}${suffix}`;
+      }
+    }
+
+    // Match by basename if base changed
+    const base = basename(decodedNorm);
+    if (oldBase.toLowerCase() !== newBase.toLowerCase() && base.toLowerCase() === oldBaseDecoded) {
       const dirIdx = rawPath.lastIndexOf("/");
       const dirPart = dirIdx >= 0 ? rawPath.slice(0, dirIdx + 1) : "";
-      const encodedNewName = encodeURI(newFileName);
+      const encodedNewName = encodeURI(newBase);
       return `${prefix}${dirPart}${encodedNewName}${hash}${suffix}`;
     }
 
@@ -80,7 +144,7 @@ export function refactorMarkdownFileLinks(
 }
 
 /**
- * Refactor both wikilinks and standard markdown file links when a file is renamed.
+ * Refactor both wikilinks and standard markdown file links when a file is renamed or moved.
  */
 export function refactorAllLinks(
   content: string,
@@ -90,12 +154,16 @@ export function refactorAllLinks(
   const oldBase = basename(oldPathOrName);
   const newBase = basename(newPathOrName);
 
-  const oldStem = oldBase.replace(/\.(md|markdown)$/i, "");
-  const newStem = newBase.replace(/\.(md|markdown)$/i, "");
+  const oldStem = stripMdExt(oldBase);
+  const newStem = stripMdExt(newBase);
 
-  let result = refactorWikilinks(content, oldStem, newStem);
-  if (oldBase.match(/\.(md|markdown)$/i) && newBase.match(/\.(md|markdown)$/i)) {
-    result = refactorMarkdownFileLinks(result, oldBase, newBase);
+  const oldNorm = normalizeSlash(oldPathOrName);
+  const newNorm = normalizeSlash(newPathOrName);
+
+  let result = refactorWikilinks(content, oldStem, newStem, oldNorm, newNorm);
+  if (oldBase.match(/\.(md|markdown)$/i) || newBase.match(/\.(md|markdown)$/i)) {
+    result = refactorMarkdownFileLinks(result, oldNorm, newNorm);
   }
   return result;
 }
+

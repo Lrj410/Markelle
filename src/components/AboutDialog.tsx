@@ -50,10 +50,10 @@ export function AboutDialog({ open, onClose }: Props) {
       <button type="button" className="modal-backdrop" onClick={onClose} aria-label={t("common.close")} />
       <div className="modal-panel about-panel" ref={panelRef}>
         <div className="about-brand">
-          <img className="about-logo" src="/markelle.svg" alt="Markelle" width={52} height={52} />
+          <img className="about-logo" src="/markelle.svg" alt={t("common.brand")} width={52} height={52} />
           <div>
             <h2 id="about-title" className="about-name">
-              Markelle
+              {t("common.brand")}
             </h2>
             <div className="about-ver">{t("about.version", { version })}</div>
           </div>

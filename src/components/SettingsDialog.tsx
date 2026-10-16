@@ -10,7 +10,7 @@ import { useLocale } from "../hooks/useLocale";
 import { useModalFocusTrap } from "../hooks/useModalFocusTrap";
 import { Select } from "./Select";
 import { ollamaCheckConnection } from "../lib/ollama";
-import { cogniStackCheckHealth } from "../lib/cognistack";
+import { cogniStackCheckHealth, type CogniStackHealthResult } from "../lib/cognistack";
 
 interface Props {
   open: boolean;
@@ -34,12 +34,9 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
   } | null>(null);
 
   const [testingCogni, setTestingCogni] = useState(false);
-  const [cogniStatus, setCogniStatus] = useState<{
-    tested: boolean;
-    ok: boolean;
-    version?: string;
-    error?: string;
-  } | null>(null);
+  const [cogniStatus, setCogniStatus] = useState<
+    ({ tested: boolean } & CogniStackHealthResult) | null
+  >(null);
 
   const handleTestOllama = async () => {
     setTestingOllama(true);
@@ -126,7 +123,7 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
       <div className="modal-panel settings-panel" ref={panelRef}>
         <div className="modal-head settings-head">
           <div>
-            <div className="modal-kicker">Markelle</div>
+            <div className="modal-kicker">{t("common.brand")}</div>
             <h2 id={titleId}>{t("settings.title")}</h2>
           </div>
           <button
@@ -809,7 +806,7 @@ export function SettingsDialog({ open, settings, onClose, onChange }: Props) {
                       {cogniStatus?.tested && (
                         <span className={cogniStatus.ok ? "ollama-status-ok" : "ollama-status-err"}>
                           {cogniStatus.ok
-                            ? t("settings.cogniOnline", { version: cogniStatus.version || "1.3.0" })
+                            ? `${t("settings.cogniOnline", { version: cogniStatus.version || "1.4.0" })}${cogniStatus.zone ? ` [${cogniStatus.zone}]` : ""}`
                             : t("settings.cogniOffline", {
                                 error: cogniStatus.error || t("settings.cogniNoService"),
                               })}

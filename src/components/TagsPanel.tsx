@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { listVaultTags, type TagInfo } from "../lib/vault";
 import { t } from "../lib/i18n";
 import { useLocale } from "../hooks/useLocale";
+import { EmptyState } from "./ui/EmptyState";
 
 interface Props {
   vaultRoot: string | null;
@@ -61,14 +62,14 @@ export function TagsPanel({ vaultRoot, onOpenFile }: Props) {
 
   if (!vaultRoot) {
     return (
-      <aside className="tags-panel backlinks-panel dock-fill" aria-label={t("panel.tags")}>
-        <p className="backlinks-empty">{t("vault.needOpen")}</p>
+      <aside className="tags-panel panel-shell dock-fill" aria-label={t("panel.tags")}>
+        <EmptyState>{t("vault.needOpen")}</EmptyState>
       </aside>
     );
   }
 
   return (
-    <aside className="tags-panel backlinks-panel dock-fill" aria-label={t("panel.tags")}>
+    <aside className="tags-panel panel-shell dock-fill" aria-label={t("panel.tags")}>
       <div className="tags-filter">
         <input
           type="search"
@@ -79,16 +80,18 @@ export function TagsPanel({ vaultRoot, onOpenFile }: Props) {
         />
       </div>
       {loading && tags.length === 0 && (
-        <p className="backlinks-empty quiet">…</p>
+        <EmptyState quiet busy>
+          {t("common.loading")}
+        </EmptyState>
       )}
-      {error && <p className="backlinks-empty">{error}</p>}
+      {error && <EmptyState>{error}</EmptyState>}
       {!loading && !error && filtered.length === 0 && (
-        <p className="backlinks-empty">{t("cmd.empty")}</p>
+        <EmptyState>{t("tags.empty")}</EmptyState>
       )}
       {filtered.length > 0 && (
-        <div className="backlinks-head">
+        <div className="panel-list-head">
           {t("panel.tags")}
-          {loading ? "…" : ""}
+          {loading ? ` · ${t("common.loading")}` : ""}
         </div>
       )}
       {filtered.map((item) => {

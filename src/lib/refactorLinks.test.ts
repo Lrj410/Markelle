@@ -83,4 +83,28 @@ describe("refactorAllLinks", () => {
       "Check [[Tutorial#Intro|Start]] and [Doc](Tutorial.md) and unrelated [[Guidebook]].",
     );
   });
+
+  it("updates path-prefixed links when moving file across folders with same stem", () => {
+    const input = "See [[docs/Guide]] and [Doc](./docs/Guide.md) and un-prefixed [[Guide]].";
+    const result = refactorAllLinks(
+      input,
+      "docs/Guide.md",
+      "archive/Guide.md",
+    );
+    expect(result).toBe(
+      "See [[archive/Guide]] and [Doc](./archive/Guide.md) and un-prefixed [[Guide]].",
+    );
+  });
+
+  it("updates path-prefixed and stem links when moving and renaming file across folders", () => {
+    const input = "See [[docs/Guide]] and [Doc](docs/Guide.md) and [[Guide]].";
+    const result = refactorAllLinks(
+      input,
+      "docs/Guide.md",
+      "archive/NewGuide.md",
+    );
+    expect(result).toBe(
+      "See [[archive/NewGuide]] and [Doc](archive/NewGuide.md) and [[NewGuide]].",
+    );
+  });
 });

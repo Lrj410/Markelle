@@ -14,6 +14,7 @@ import { isDirty, type DocTab } from "../lib/tabs";
 import { t } from "../lib/i18n";
 import { useLocale } from "../hooks/useLocale";
 import { Select } from "./Select";
+import { formatChord } from "../lib/modKey";
 
 interface Props {
   // Tabs & Title state
@@ -25,6 +26,11 @@ interface Props {
   vaultName?: string;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
+  onCloseOtherTabs?: (id: string) => void;
+  onCloseTabsToRight?: (id: string) => void;
+  onCopyPath?: (path: string) => void;
+  onCopyRelativePath?: (path: string) => void;
+  onRevealInFileManager?: (path: string) => void;
   onOpenInNewWindow: (id: string) => void;
   onReorderTabs?: (from: number, to: number) => void;
   onNewNote?: () => void;
@@ -65,6 +71,11 @@ function UnifiedHeaderInner({
   vaultName,
   onSelectTab,
   onCloseTab,
+  onCloseOtherTabs,
+  onCloseTabsToRight,
+  onCopyPath,
+  onCopyRelativePath,
+  onRevealInFileManager,
   onOpenInNewWindow,
   onReorderTabs,
   onNewNote,
@@ -96,11 +107,35 @@ function UnifiedHeaderInner({
   const [maximized, setMaximized] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [listOpen, setListOpen] = useState(false);
+  const [tabContextMenu, setTabContextMenu] = useState<{
+    x: number;
+    y: number;
+    tab: DocTab;
+    idx: number;
+  } | null>(null);
   const [stripEdges, setStripEdges] = useState({ start: false, end: false, width: 0 });
   const moreRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const tabContextRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
   const dragFrom = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!tabContextMenu) return;
+    const onDoc = (e: MouseEvent) => {
+      if (tabContextRef.current?.contains(e.target as Node)) return;
+      setTabContextMenu(null);
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") setTabContextMenu(null);
+    };
+    document.addEventListener("mousedown", onDoc);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [tabContextMenu]);
 
   const refreshMaximized = useCallback(async () => {
     try {
@@ -409,6 +444,16 @@ function UnifiedHeaderInner({
                     e.stopPropagation();
                     onOpenInNewWindow(tab.id);
                   }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setTabContextMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      tab,
+                      idx,
+                    });
+                  }}
                   draggable={Boolean(onReorderTabs)}
                   onDragStart={(e) => onDragStart(e, idx)}
                   onDragOver={onDragOver}
@@ -562,14 +607,14 @@ function UnifiedHeaderInner({
             type="button"
             className="unified-cmd-pill"
             onClick={onOpenCommandPalette}
-            title="Ctrl+K / ⌘K"
+            title={formatChord("K")}
             aria-label={t("cmd.label")}
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
               <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z" />
             </svg>
             <span className="cmd-pill-label">{t("cmd.label")}</span>
-            <kbd className="cmd-pill-kbd">Ctrl+K</kbd>
+            <kbd className="cmd-pill-kbd">{formatChord("K")}</kbd>
           </button>
         )}
 
@@ -606,8 +651,8 @@ function UnifiedHeaderInner({
               </button>
             </div>
 
-            {/* Layout Preset Switcher: docs vs book (directly visible!) */}
-            <div className="unified-seg" role="group" aria-label={t("view.layout")}>
+            {/* Layout Preset Switcher: docs vs book (hidden on narrow; also in More) */}
+            <div className="unified-seg unified-seg-layout" role="group" aria-label={t("view.layout")}>
               <button
                 type="button"
                 className={clsx("seg-btn", { active: layout === "docs" })}
@@ -645,7 +690,7 @@ function UnifiedHeaderInner({
                 <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
                   <path d="M14 2.5A1.5 1.5 0 0 0 12.5 1h-9A1.5 1.5 0 0 0 2 2.5v11A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5v-11ZM12.5 2.5v11h-2v-11h2ZM9 2.5v11H3.5a.5.5 0 0 1-.5-.5v-10a.5.5 0 0 1 .5-.5H9Z" />
                 </svg>
-                <span>{t("panel.auxDock")}</span>
+                <span className="unified-text-btn-label">{t("panel.auxDock")}</span>
               </button>
             )}
 
@@ -672,20 +717,19 @@ function UnifiedHeaderInner({
                     strokeLinejoin="round"
                   />
                 </svg>
-                <span>AI</span>
+                <span className="unified-text-btn-label">AI</span>
               </button>
             )}
 
             {/* Zen / Immersive Button */}
             <button
               type="button"
-              className={clsx("unified-text-btn", { active: immersive })}
+              className={clsx("unified-text-btn unified-immersive-btn", { active: immersive })}
               onClick={onToggleImmersive}
               title={`${t("toolbar.immersiveTitle")} (F11)`}
               aria-pressed={immersive}
-             
             >
-              <span>{t("toolbar.immersive")}</span>
+              <span className="unified-text-btn-label">{t("toolbar.immersive")}</span>
             </button>
 
             {/* Save Button (shows explicit state when dirty) */}
@@ -698,8 +742,8 @@ function UnifiedHeaderInner({
                 truncated
                   ? t("toolbar.saveWait")
                   : dirty
-                  ? `${t("toolbar.saveDirty")} (Ctrl+S)`
-                  : `${t("toolbar.save")} (Ctrl+S)`
+                  ? `${t("toolbar.saveDirty")} (${formatChord("S")})`
+                  : `${t("toolbar.save")} (${formatChord("S")})`
               }
              
             >
@@ -897,6 +941,106 @@ function UnifiedHeaderInner({
           </button>
         </div>
       </div>
+
+      {tabContextMenu && (
+        <div
+          ref={tabContextRef}
+          role="menu"
+          className="vault-ctx"
+          style={{
+            top: Math.min(tabContextMenu.y, window.innerHeight - 240),
+            left: Math.min(tabContextMenu.x, window.innerWidth - 200),
+          }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="vault-ctx-item"
+            onClick={() => {
+              onCloseTab(tabContextMenu.tab.id);
+              setTabContextMenu(null);
+            }}
+          >
+            {t("tabs.close")}
+          </button>
+          {tabs.length > 1 && (
+            <button
+              type="button"
+              role="menuitem"
+              className="vault-ctx-item"
+              onClick={() => {
+                onCloseOtherTabs?.(tabContextMenu.tab.id);
+                setTabContextMenu(null);
+              }}
+            >
+              {t("tabs.closeOthers")}
+            </button>
+          )}
+          {tabContextMenu.idx < tabs.length - 1 && (
+            <button
+              type="button"
+              role="menuitem"
+              className="vault-ctx-item"
+              onClick={() => {
+                onCloseTabsToRight?.(tabContextMenu.tab.id);
+                setTabContextMenu(null);
+              }}
+            >
+              {t("tabs.closeToRight")}
+            </button>
+          )}
+          <div className="editor-ctx-sep" />
+          <button
+            type="button"
+            role="menuitem"
+            className="vault-ctx-item"
+            onClick={() => {
+              onOpenInNewWindow(tabContextMenu.tab.id);
+              setTabContextMenu(null);
+            }}
+          >
+            {t("tabs.openInNewWindow")}
+          </button>
+          {tabContextMenu.tab.path && (
+            <>
+              <div className="editor-ctx-sep" />
+              <button
+                type="button"
+                role="menuitem"
+                className="vault-ctx-item"
+                onClick={() => {
+                  onCopyPath?.(tabContextMenu.tab.path);
+                  setTabContextMenu(null);
+                }}
+              >
+                {t("tabs.copyPath")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="vault-ctx-item"
+                onClick={() => {
+                  onCopyRelativePath?.(tabContextMenu.tab.path);
+                  setTabContextMenu(null);
+                }}
+              >
+                {t("tabs.copyRelativePath")}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="vault-ctx-item"
+                onClick={() => {
+                  onRevealInFileManager?.(tabContextMenu.tab.path);
+                  setTabContextMenu(null);
+                }}
+              >
+                {t("tabs.revealInFileManager")}
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </header>
   );
 }

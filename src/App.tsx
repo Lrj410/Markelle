@@ -50,7 +50,7 @@ import { decryptNote, encryptNote, isEncryptedNote } from "./lib/noteCrypto";
 import { checkForUpdates } from "./lib/updateCheck";
 import { listVaultTemplates } from "./lib/templatesList";
 import { getVersion } from "@tauri-apps/api/app";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { PropertiesStrip } from "./components/PropertiesStrip";
 import { PluginPanel } from "./components/PluginPanel";
 import { AboutDialog } from "./components/AboutDialog";
@@ -131,8 +131,15 @@ import { IMMERSIVE_TOGGLE_EVENT } from "./lib/plugins/builtin";
 import type { PluginInfo } from "./lib/plugins/types";
 import type { GraphScope, ReaderSettings, RecentEntry, ViewMode } from "./lib/types";
 import { DEFAULT_SETTINGS } from "./lib/types";
-import { isPanelVisible, panelLabel, togglePanel, type DockLayout, type PanelId } from "./lib/dock";
-import { allocateUniquePath, basename, dirname, joinPath, toPosixPath } from "./lib/paths";
+import {
+  isPanelVisible,
+  movePanel,
+  panelLabel,
+  togglePanel,
+  type DockLayout,
+  type PanelId,
+} from "./lib/dock";
+import { allocateUniquePath, basename, dirname, joinPath, toPosixPath, toRelativePath } from "./lib/paths";
 import { refactorAllLinks } from "./lib/refactorLinks";
 import {
   isAttachmentDropCandidate,
@@ -150,6 +157,7 @@ import {
   renderTemplate,
 } from "./lib/templates";
 import { matchKeybinding } from "./lib/keybinding";
+import { formatChord } from "./lib/modKey";
 import { useBusy } from "./hooks/useBusy";
 import { useCtrlWheelZoom } from "./hooks/useCtrlWheelZoom";
 import { useResolvedDark } from "./hooks/useResolvedDark";
@@ -432,6 +440,14 @@ function App() {
   useEffect(() => {
     document.documentElement.classList.toggle("immersive", settings.immersive);
   }, [settings.immersive]);
+
+  // Immersive is for reading/editing only — leave it when the main surface changes.
+  useEffect(() => {
+    if (!settingsRef.current.immersive) return;
+    if (graphOpen || !activeId) {
+      setSettings((s) => (s.immersive ? { ...s, immersive: false } : s));
+    }
+  }, [graphOpen, activeId]);
 
   /** Remember maximized state so exiting immersion restores it (not a tiny window). */
   const preImmersiveMaximizedRef = useRef(false);
@@ -1203,9 +1219,13 @@ function App() {
     }
   }, [openPath]);
 
-  const saveFile = useCallback(async () => {
-    if (!active) return;
-    const block = getWriteBlockReason(active);
+  const saveFile = useCallback(async (targetTab?: DocTab) => {
+    const tabToSave =
+      targetTab ??
+      (activeIdRef.current ? tabsRef.current.find((t) => t.id === activeIdRef.current) : null) ??
+      active;
+    if (!tabToSave) return;
+    const block = getWriteBlockReason(tabToSave);
     if (block === "truncated") {
       setStatus(t("app.waitHydrateSave"));
       return;
@@ -1216,12 +1236,12 @@ function App() {
       setStatus(t("app.largeReadOnlySave"));
       return;
     }
-    const tabId = active.id;
-    const path = active.path;
-    const enc = (active.encoding ?? "utf-8").toLowerCase();
+    const tabId = tabToSave.id;
+    const path = tabToSave.path;
+    const enc = (tabToSave.encoding ?? "utf-8").toLowerCase();
     if (enc !== "utf-8" && enc !== "utf8") {
       const ok = await askConfirm(
-        t("app.confirmReencode", { enc: active.encoding ?? "" }),
+        t("app.confirmReencode", { enc: tabToSave.encoding ?? "" }),
         { title: "Markelle", kind: "warning" },
       );
       if (!ok) return;
@@ -1632,7 +1652,7 @@ function App() {
 
       if (meta && event.key === ",") {
         event.preventDefault();
-        setPluginsOpen((v) => !v);
+        setSettingsOpen((v) => !v);
         return;
       }
       // Built-in shortcuts first — plugins must not steal Ctrl+S / O / W / …
@@ -2028,12 +2048,28 @@ function App() {
       diskPromptRef.current ||
       snoozedForActive
     ) return;
+    const departingTab = active;
     const timer = window.setTimeout(() => {
       if (diskPromptRef.current) return;
-      if (snoozedDiskRef.current?.path === active.path) return;
-      void saveFile();
+      if (snoozedDiskRef.current?.path === departingTab.path) return;
+      void saveFile(departingTab);
     }, settings.autosaveDelayMs);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      if (
+        settings.autosave &&
+        departingTab &&
+        isDirty(departingTab) &&
+        !departingTab.truncated &&
+        !departingTab.backendBuffer &&
+        !diskPromptRef.current &&
+        snoozedDiskRef.current?.path !== departingTab.path
+      ) {
+        if (activeIdRef.current !== departingTab.id) {
+          void saveFile(departingTab);
+        }
+      }
+    };
     // Member deps only: `active` is a fresh object on every UI patch, so depending
     // on it directly would restart the autosave countdown for unrelated changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2138,21 +2174,21 @@ function App() {
       {
         id: "open-file",
         label: t("welcome.openFile"),
-        hint: "Ctrl+O",
+        hint: formatChord("O"),
         group: t("cmdGroup.file"),
         run: () => void pickOpen(),
       },
       {
         id: "open-vault",
         label: t("welcome.openVault"),
-        hint: "Ctrl+Shift+O",
+        hint: formatChord("Shift", "O"),
         group: t("cmdGroup.file"),
         run: () => void pickVault(),
       },
       {
         id: "new-note",
         label: t("vault.ctxNewNote"),
-        hint: "Ctrl+N",
+        hint: formatChord("N"),
         group: t("cmdGroup.file"),
         disabled: !vault,
         run: () => void createNewNote(),
@@ -2174,7 +2210,7 @@ function App() {
       {
         id: "save",
         label: t("toolbar.save"),
-        hint: "Ctrl+S",
+        hint: formatChord("S"),
         group: t("cmdGroup.file"),
         disabled: !active || !dirty || Boolean(active?.truncated),
         run: () => void saveFile(),
@@ -2182,7 +2218,7 @@ function App() {
       {
         id: "save-as",
         label: t("cmdItem.saveAs"),
-        hint: "Ctrl+Shift+S",
+        hint: formatChord("Shift", "S"),
         group: t("cmdGroup.file"),
         disabled: !active || Boolean(active?.truncated),
         run: () => void saveAs(),
@@ -2190,7 +2226,7 @@ function App() {
       {
         id: "find-replace",
         label: t("cmdItem.findReplace"),
-        hint: "Ctrl+F",
+        hint: formatChord("F"),
         group: t("cmdGroup.edit"),
         disabled: !active,
         run: () => {
@@ -2202,7 +2238,7 @@ function App() {
       {
         id: "insert-math",
         label: t("cmdItem.insertMath"),
-        hint: "Ctrl+Shift+M",
+        hint: formatChord("Shift", "M"),
         group: t("cmdGroup.edit"),
         disabled: !active,
         run: () => {
@@ -2219,7 +2255,7 @@ function App() {
       {
         id: "insert-mermaid",
         label: t("cmdItem.insertMermaid"),
-        hint: "Ctrl+Shift+D",
+        hint: formatChord("Shift", "D"),
         group: t("cmdGroup.edit"),
         disabled: !active,
         run: () => {
@@ -2236,7 +2272,7 @@ function App() {
       {
         id: "mode-read",
         label: t("cmdItem.modeRead"),
-        hint: "Ctrl+E",
+        hint: formatChord("E"),
         group: t("cmdGroup.view"),
         disabled: !active,
         run: () => {
@@ -2247,7 +2283,7 @@ function App() {
       {
         id: "mode-source",
         label: t("cmdItem.modeSource"),
-        hint: "Ctrl+E",
+        hint: formatChord("E"),
         group: t("cmdGroup.view"),
         disabled: !active,
         run: () => {
@@ -2258,7 +2294,7 @@ function App() {
       {
         id: "mode-split",
         label: t("cmdItem.modeSplit"),
-        hint: "Ctrl+E",
+        hint: formatChord("E"),
         group: t("cmdGroup.view"),
         disabled: !active,
         run: () => {
@@ -2275,7 +2311,7 @@ function App() {
       {
         id: "graph",
         label: graphOpen ? t("cmdItem.graphClose") : t("cmdItem.graphOpen"),
-        hint: "Ctrl+G",
+        hint: formatChord("G"),
         group: t("cmdGroup.view"),
         disabled: !vault,
         run: () => setGraphOpen((v) => !v),
@@ -2297,16 +2333,43 @@ function App() {
       {
         id: "panel-vault",
         label: t("cmdItem.panelVault"),
-        hint: "Ctrl+Shift+B",
+        hint: formatChord("Shift", "B"),
         group: t("cmdGroup.panels"),
         run: () => onTogglePanel("vault"),
       },
       {
         id: "panel-right-dock",
         label: settings.dock.right.active ? t("panel.hideRightDock") : t("panel.showRightDock"),
-        hint: "Ctrl+Shift+E",
+        hint: formatChord("Shift", "E"),
         group: t("cmdGroup.panels"),
         run: () => onToggleRightDock(),
+      },
+      {
+        id: "layout-writing",
+        label: t("layout.writing"),
+        group: t("cmdGroup.panels"),
+        run: () => {
+          const right = settings.dock.right;
+          if (right.active) patchDock({ ...settings.dock, right: { ...right, active: null } });
+        },
+      },
+      {
+        id: "layout-research",
+        label: t("layout.research"),
+        group: t("cmdGroup.panels"),
+        run: () => {
+          const right = settings.dock.right;
+          const extra: PanelId[] = ["backlinks", "ai", "toc"];
+          const panels: PanelId[] = [...new Set<PanelId>([...right.panels, ...extra])];
+          patchDock({
+            ...settings.dock,
+            right: {
+              ...right,
+              panels,
+              active: right.active && panels.includes(right.active) ? right.active : "backlinks",
+            },
+          });
+        },
       },
       {
         id: "panel-toc",
@@ -2343,6 +2406,36 @@ function App() {
         label: t("cmdItem.panelCalendar"),
         group: t("cmdGroup.panels"),
         run: () => onTogglePanel("calendar"),
+      },
+      {
+        id: "dock-move-left",
+        label: t("dock.moveLeft"),
+        group: t("cmdGroup.panels"),
+        disabled: !settings.dock.right.active && !settings.dock.bottom.active,
+        run: () => {
+          const id = settings.dock.right.active ?? settings.dock.bottom.active;
+          if (id) patchDock(movePanel(settings.dock, id, "left"));
+        },
+      },
+      {
+        id: "dock-move-right",
+        label: t("dock.moveRight"),
+        group: t("cmdGroup.panels"),
+        disabled: !settings.dock.left.active && !settings.dock.bottom.active,
+        run: () => {
+          const id = settings.dock.left.active ?? settings.dock.bottom.active;
+          if (id && id !== "vault") patchDock(movePanel(settings.dock, id, "right"));
+        },
+      },
+      {
+        id: "dock-move-bottom",
+        label: t("dock.moveBottom"),
+        group: t("cmdGroup.panels"),
+        disabled: !settings.dock.left.active && !settings.dock.right.active,
+        run: () => {
+          const id = settings.dock.right.active ?? settings.dock.left.active;
+          if (id && id !== "vault") patchDock(movePanel(settings.dock, id, "bottom"));
+        },
       },
       {
         id: "panel-ai",
@@ -2523,7 +2616,7 @@ function App() {
       {
         id: "capture",
         label: t("capture.title"),
-        hint: "Ctrl+Shift+N",
+        hint: formatChord("Shift", "N"),
         group: t("cmdGroup.notes"),
         run: () => setCaptureOpen(true),
       },
@@ -2677,13 +2770,13 @@ function App() {
       {
         id: "panel-plugins",
         label: t("plugins.title"),
-        hint: "Ctrl+,",
         group: t("cmdGroup.app"),
         run: () => setPluginsOpen(true),
       },
       {
         id: "settings",
         label: t("settings.title"),
+        hint: formatChord(","),
         group: t("cmdGroup.app"),
         run: () => setSettingsOpen(true),
       },
@@ -2739,6 +2832,8 @@ function App() {
     onTogglePanel,
     onToggleRightDock,
     openPath,
+    patchDock,
+    settings.dock,
     settings.dock.right.active,
     settings.immersive,
     settings.autosave,
@@ -2952,6 +3047,85 @@ function App() {
   );
 
   const handleCloseTab = useCallback((id: string) => void closeTab(id), [closeTab]);
+  const handleCloseOtherTabs = useCallback(
+    async (id: string) => {
+      const others = tabsRef.current.filter((t) => t.id !== id);
+      for (const t of others) {
+        if (!(await confirmCloseTab(t))) return;
+      }
+      for (const t of others) {
+        hydrateGenRef.current.set(t.id, (hydrateGenRef.current.get(t.id) ?? 0) + 1);
+        hydrateUnlistenRef.current.get(t.id)?.();
+        hydrateUnlistenRef.current.delete(t.id);
+        if (t.backendBuffer || t.large) {
+          void largeFileClose(t.path).catch(() => {});
+        }
+      }
+      const next = tabsRef.current.filter((t) => t.id === id);
+      tabsRef.current = next;
+      setTabs(next);
+      setActiveId(id);
+    },
+    [confirmCloseTab],
+  );
+
+  const handleCloseTabsToRight = useCallback(
+    async (id: string) => {
+      const idx = tabsRef.current.findIndex((t) => t.id === id);
+      if (idx === -1) return;
+      const rightTabs = tabsRef.current.slice(idx + 1);
+      for (const t of rightTabs) {
+        if (!(await confirmCloseTab(t))) return;
+      }
+      for (const t of rightTabs) {
+        hydrateGenRef.current.set(t.id, (hydrateGenRef.current.get(t.id) ?? 0) + 1);
+        hydrateUnlistenRef.current.get(t.id)?.();
+        hydrateUnlistenRef.current.delete(t.id);
+        if (t.backendBuffer || t.large) {
+          void largeFileClose(t.path).catch(() => {});
+        }
+      }
+      const next = tabsRef.current.slice(0, idx + 1);
+      tabsRef.current = next;
+      setTabs(next);
+      if (!next.some((t) => t.id === activeIdRef.current)) {
+        setActiveId(id);
+      }
+    },
+    [confirmCloseTab],
+  );
+
+  const handleCopyPath = useCallback(async (path: string) => {
+    try {
+      await navigator.clipboard.writeText(path);
+      setStatus(t("tabs.pathCopied"));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const handleCopyRelativePath = useCallback(
+    async (path: string) => {
+      try {
+        const v = vaultRef.current;
+        const rel = v ? toRelativePath(v.root, path) : basename(path);
+        await navigator.clipboard.writeText(rel);
+        setStatus(t("tabs.pathCopied"));
+      } catch {
+        /* ignore */
+      }
+    },
+    [],
+  );
+
+  const handleRevealInFileManager = useCallback(async (path: string) => {
+    try {
+      await revealItemInDir(path);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const handleOpenInNewWindow = useCallback((id: string) => void openTabInNewWindow(id), [openTabInNewWindow]);
   const handleNewNote = useCallback(() => void createNewNote(), [createNewNote]);
   const handleOpenCommandPalette = useCallback(() => setCmdOpen(true), []);
@@ -3333,6 +3507,9 @@ function App() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-pane">
+        {t("a11y.skipToMain")}
+      </a>
       <UnifiedHeader
         tabs={tabs}
         activeId={activeId}
@@ -3342,6 +3519,11 @@ function App() {
         vaultName={vault?.name}
         onSelectTab={setActiveId}
         onCloseTab={handleCloseTab}
+        onCloseOtherTabs={handleCloseOtherTabs}
+        onCloseTabsToRight={handleCloseTabsToRight}
+        onCopyPath={handleCopyPath}
+        onCopyRelativePath={handleCopyRelativePath}
+        onRevealInFileManager={handleRevealInFileManager}
         onOpenInNewWindow={handleOpenInNewWindow}
         onReorderTabs={reorderTabs}
         onNewNote={handleNewNote}
@@ -3388,10 +3570,10 @@ function App() {
             className="btn primary"
             onClick={() => void saveFile()}
             disabled={Boolean(active?.truncated)}
-            title="Ctrl+S"
+            title={formatChord("S")}
           >
             {t("toolbar.save")}
-            <kbd>Ctrl+S</kbd>
+            <kbd>{formatChord("S")}</kbd>
           </button>
         </div>
       )}
@@ -3439,7 +3621,9 @@ function App() {
             renderPanel={renderDockPanel}
           >
             <main
+              id="main-pane"
               className="main-pane"
+              tabIndex={-1}
               data-mode={graphOpen ? "graph" : (active?.mode ?? "idle")}
             >
               {graphOpen && vault ? (
@@ -3714,8 +3898,13 @@ function App() {
           const s = settingsRef.current;
           const stamp = `${formatDateYmd(new Date())} ${formatTimeHm(new Date())}`;
           const block = `\n\n## ${stamp}\n\n${text.trim()}\n`;
+          const currentActive = activeIdRef.current;
+          let targetPath = "";
+          let targetName = "";
           if (s.captureTarget === "inbox") {
             const inboxPath = joinPath(v.root, "Inbox.md");
+            targetPath = inboxPath;
+            targetName = "Inbox.md";
             await registerAccess([inboxPath]);
             // Seed the heading only when the file is brand new: append_markdown_file
             // creates a missing file, so without this a fresh `Inbox.md` would start
@@ -3727,9 +3916,10 @@ function App() {
               await writeMarkdownFile(inboxPath, "# Inbox\n");
             }
             await appendMarkdownFile(inboxPath, block);
-            await openPath(inboxPath, false, undefined, { authorize: true });
           } else {
             const daily = createDailyNote(v.root, new Date(), s.dailyFolder);
+            targetPath = daily.path;
+            targetName = basename(daily.path);
             await registerAccess([daily.path]);
             // Seed the daily-note title only on first creation (same reasoning).
             try {
@@ -3738,9 +3928,31 @@ function App() {
               await writeMarkdownFile(daily.path, daily.content);
             }
             await appendMarkdownFile(daily.path, block);
-            await openPath(daily.path, false, undefined, { authorize: true });
           }
-          setStatus(t("capture.saved"));
+
+          // If the target note is open in a tab, refresh its buffer
+          const openTab = tabsRef.current.find((t) => pathsEqual(t.path, targetPath));
+          if (openTab) {
+            try {
+              const reloaded = await readMarkdownFile(targetPath, true);
+              if (!reloaded.truncated) {
+                patchTab(openTab.id, {
+                  content: reloaded.content,
+                  savedContent: reloaded.content,
+                  size: reloaded.size,
+                  diskMtimeMs: reloaded.mtimeMs,
+                });
+              }
+            } catch {
+              /* best effort */
+            }
+          }
+
+          // Only open/switch tab if the user had no active tab open
+          if (!currentActive) {
+            await openPath(targetPath, false, undefined, { authorize: true });
+          }
+          setStatus(t("capture.savedToast", { target: targetName }));
         }}
       />
       <CanvasBoard

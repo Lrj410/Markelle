@@ -34,11 +34,12 @@ describe("dock slot size clamping", () => {
 
   it("toggles active panel to null without erasing panels", () => {
     const base = structuredClone(DEFAULT_DOCK);
-    const toggledOff = togglePanel(base, "history");
+    const activeId = base.right.active!;
+    const toggledOff = togglePanel(base, activeId);
     expect(toggledOff.right.active).toBeNull();
-    expect(toggledOff.right.panels).toContain("history");
+    expect(toggledOff.right.panels).toContain(activeId);
 
-    const toggledOn = togglePanel(toggledOff, "history");
-    expect(toggledOn.right.active).toBe("history");
+    const toggledOn = togglePanel(toggledOff, activeId);
+    expect(toggledOn.right.active).toBe(activeId);
   });
 });

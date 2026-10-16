@@ -41,4 +41,20 @@ describe("htmlToMarkdown", () => {
     expect(md).toContain("| --- | --- |");
     expect(md).toContain("| 1 | 2 |");
   });
+
+  it("preserves generics and JSX in code blocks and inline code", () => {
+    const html = '<pre><code class="language-typescript">const items: Array&lt;string&gt; = [];\nfunction App(): JSX.Element { return &lt;div&gt;Hello&lt;/div&gt;; }</code></pre><p>Use <code>Map&lt;string, number&gt;</code> here.</p>';
+    const md = htmlToMarkdown(html);
+    expect(md).toContain("```typescript");
+    expect(md).toContain("const items: Array<string> = [];");
+    expect(md).toContain("return <div>Hello</div>;");
+    expect(md).toContain("`Map<string, number>`");
+  });
+
+  it("preserves code blocks inside blockquotes", () => {
+    const html = '<blockquote><p>Quote:</p><pre><code>const a: List&lt;T&gt; = [];</code></pre></blockquote>';
+    const md = htmlToMarkdown(html);
+    expect(md).toContain("> const a: List<T> = [];");
+  });
 });
+

@@ -191,21 +191,50 @@ function DockWorkspaceInner({ layout, onChange, renderPanel, children }: Props) 
                   : t("dock.bottom")
             }
           >
-            {slot.panels.map((id) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={id === active}
-                className={clsx("dock-tab", { active: id === active })}
-                draggable
-                onDragStart={onDragStart(id)}
-                onDragEnd={onDragEnd}
-                onClick={() => onChange(setSlotActive(layout, side, id))}
-              >
-                {panelLabel(id)}
-              </button>
-            ))}
+            {slot.panels.map((id, index) => {
+              const panelDomId = `dock-${side}-panel-${id}`;
+              const tabDomId = `dock-${side}-tab-${id}`;
+              return (
+                <button
+                  key={id}
+                  id={tabDomId}
+                  type="button"
+                  role="tab"
+                  aria-selected={id === active}
+                  aria-controls={panelDomId}
+                  tabIndex={id === active ? 0 : -1}
+                  className={clsx("dock-tab", { active: id === active })}
+                  draggable
+                  onDragStart={onDragStart(id)}
+                  onDragEnd={onDragEnd}
+                  onClick={() => onChange(setSlotActive(layout, side, id))}
+                  onKeyDown={(e) => {
+                    const horizontal = side !== "bottom";
+                    const nextKey = horizontal ? "ArrowRight" : "ArrowDown";
+                    const prevKey = horizontal ? "ArrowLeft" : "ArrowUp";
+                    if (e.key !== nextKey && e.key !== prevKey && e.key !== "Home" && e.key !== "End") {
+                      return;
+                    }
+                    e.preventDefault();
+                    const len = slot.panels.length;
+                    if (!len) return;
+                    let nextIndex = index;
+                    if (e.key === nextKey) nextIndex = (index + 1) % len;
+                    else if (e.key === prevKey) nextIndex = (index - 1 + len) % len;
+                    else if (e.key === "Home") nextIndex = 0;
+                    else if (e.key === "End") nextIndex = len - 1;
+                    const nextId = slot.panels[nextIndex];
+                    if (!nextId) return;
+                    onChange(setSlotActive(layout, side, nextId));
+                    requestAnimationFrame(() => {
+                      document.getElementById(`dock-${side}-tab-${nextId}`)?.focus();
+                    });
+                  }}
+                >
+                  {panelLabel(id)}
+                </button>
+              );
+            })}
           </div>
           <button
             type="button"
@@ -234,7 +263,13 @@ function DockWorkspaceInner({ layout, onChange, renderPanel, children }: Props) 
             )}
           </button>
         </div>
-        <div className="dock-body" key={active ?? "empty"}>
+        <div
+          className="dock-body"
+          key={active ?? "empty"}
+          id={active ? `dock-${side}-panel-${active}` : undefined}
+          role="tabpanel"
+          aria-labelledby={active ? `dock-${side}-tab-${active}` : undefined}
+        >
           {active ? renderPanel(active) : null}
         </div>
         <div

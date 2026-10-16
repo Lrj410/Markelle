@@ -1,10 +1,12 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import clsx from "clsx";
 import type { ActivityId, PanelId } from "../lib/dock";
 import { isPanelVisible, type DockLayout } from "../lib/dock";
+import { moreMenuPanelIds } from "../lib/panelRegistry";
 import type { ColorScheme } from "../lib/types";
 import { t } from "../lib/i18n";
 import { useLocale } from "../hooks/useLocale";
+import { formatChord } from "../lib/modKey";
 
 interface Props {
   dock: DockLayout;
@@ -25,7 +27,7 @@ interface Props {
 }
 
 /** 18×18 optical icons — consistent 1.5 stroke, rounded terminals */
-const ICONS: Record<ActivityId | "theme-sun" | "theme-moon" | "about", ReactNode> = {
+const ICONS: Record<ActivityId | "theme-sun" | "theme-moon" | "about" | "more", ReactNode> = {
   vault: (
     <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
       <rect x="3" y="4" width="12" height="10" rx="2" stroke="currentColor" strokeWidth="1.5" />
@@ -148,6 +150,13 @@ const ICONS: Record<ActivityId | "theme-sun" | "theme-moon" | "about", ReactNode
       <circle cx="9" cy="5.9" r="0.95" fill="currentColor" />
     </svg>
   ),
+  more: (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
+      <circle cx="4.5" cy="9" r="1.25" fill="currentColor" />
+      <circle cx="9" cy="9" r="1.25" fill="currentColor" />
+      <circle cx="13.5" cy="9" r="1.25" fill="currentColor" />
+    </svg>
+  ),
   "theme-sun": (
     <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
       <circle cx="9" cy="9" r="3" stroke="currentColor" strokeWidth="1.5" />
@@ -171,6 +180,17 @@ const ICONS: Record<ActivityId | "theme-sun" | "theme-moon" | "about", ReactNode
   ),
 };
 
+const PANEL_LABEL: Record<PanelId, () => string> = {
+  vault: () => t("panel.vault"),
+  toc: () => t("panel.toc"),
+  backlinks: () => t("panel.backlinks"),
+  tags: () => t("panel.tags"),
+  query: () => t("panel.query"),
+  history: () => t("panel.history"),
+  calendar: () => t("panel.calendar"),
+  ai: () => t("panel.ai"),
+};
+
 export function ActivityBar({
   dock,
   graphOpen,
@@ -190,6 +210,27 @@ export function ActivityBar({
 }: Props) {
   useLocale();
   const themeLabel = t("panel.theme");
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMoreOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [moreOpen]);
+
+  const moreIds = moreMenuPanelIds();
+  const secondaryActive = moreIds.some((id) => isPanelVisible(dock, id));
 
   const item = (
     id: PanelId,
@@ -248,25 +289,73 @@ export function ActivityBar({
       aria-label={t("panel.activity")}
     >
       <div className="activity-group">
-        {item("vault", t("panel.vault"), false, `${t("panel.vault")} Ctrl+B`)}
-        {item("ai", t("panel.ai"), false, `${t("panel.ai")} Alt+A`)}
-        {item("toc", t("panel.toc"))}
-        {item("backlinks", t("panel.backlinks"))}
-        {item("tags", t("panel.tags"))}
-        {item("query", t("panel.query"))}
-        {item("history", t("panel.history"))}
-        {item("calendar", t("panel.calendar"))}
+        {item(
+          "vault",
+          PANEL_LABEL.vault(),
+          false,
+          `${PANEL_LABEL.vault()} ${formatChord("Shift", "B")}`,
+        )}
+        {item("toc", PANEL_LABEL.toc())}
+        {item("ai", PANEL_LABEL.ai(), false, `${PANEL_LABEL.ai()} Alt+A`)}
         {action("graph", t("panel.graph"), ICONS.graph, {
           active: graphOpen,
           disabled: !vaultOpen,
-          title: vaultOpen ? `${t("panel.graph")} Ctrl+G` : t("vault.needOpen"),
+          title: vaultOpen ? `${t("panel.graph")} ${formatChord("G")}` : t("vault.needOpen"),
           onClick: onGraph,
         })}
-        {action("plugins", t("panel.plugins"), ICONS.plugins, {
-          active: pluginsOpen,
-          title: `${t("panel.plugins")} Ctrl+,`,
-          onClick: onPlugins,
-        })}
+        <div className="activity-more" ref={moreRef}>
+          <button
+            type="button"
+            className={clsx("activity-btn", { active: moreOpen || secondaryActive })}
+            aria-label={t("panel.morePanels")}
+            aria-expanded={moreOpen}
+            aria-haspopup="menu"
+            title={t("panel.morePanels")}
+            onClick={() => setMoreOpen((v) => !v)}
+          >
+            <span className="activity-btn-icon" aria-hidden="true">
+              {ICONS.more}
+            </span>
+            {expanded ? <span className="activity-btn-label">{t("panel.morePanels")}</span> : null}
+          </button>
+          {moreOpen ? (
+            <div className="activity-more-menu" role="menu" aria-label={t("panel.morePanels")}>
+              {moreIds.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="menuitem"
+                  className={clsx("activity-more-item", {
+                    active: isPanelVisible(dock, id),
+                  })}
+                  onClick={() => {
+                    onTogglePanel(id);
+                    setMoreOpen(false);
+                  }}
+                >
+                  <span className="activity-btn-icon" aria-hidden>
+                    {ICONS[id]}
+                  </span>
+                  <span>{PANEL_LABEL[id]()}</span>
+                </button>
+              ))}
+              <button
+                type="button"
+                role="menuitem"
+                className={clsx("activity-more-item", { active: pluginsOpen })}
+                onClick={() => {
+                  setMoreOpen(false);
+                  onPlugins();
+                }}
+              >
+                <span className="activity-btn-icon" aria-hidden>
+                  {ICONS.plugins}
+                </span>
+                <span>{t("panel.plugins")}</span>
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
       <div className="activity-group activity-group-bottom">
         {onToggleExpanded ? (
@@ -306,6 +395,7 @@ export function ActivityBar({
         ) : null}
         {action("settings", t("panel.settings"), ICONS.settings, {
           active: settingsOpen,
+          title: `${t("panel.settings")} ${formatChord(",")}`,
           onClick: onSettings,
         })}
         {action(
@@ -318,7 +408,7 @@ export function ActivityBar({
           },
         )}
         {action("about", t("panel.about"), ICONS.about, {
-          title: `${t("panel.about")} Markelle`,
+          title: `${t("panel.about")} ${t("common.brand")}`,
           onClick: onAbout,
         })}
       </div>

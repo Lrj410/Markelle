@@ -40,19 +40,20 @@ export function panelLabel(id: PanelId): string {
   return t(PANEL_MSG[id]);
 }
 
-export const DEFAULT_AUX_PANELS: PanelId[] = [
-  "ai",
-  "history",
-  "query",
-  "tags",
+/** Panels that ship in the right dock for fresh installs (keep the tab row short). */
+export const DEFAULT_AUX_PANELS: PanelId[] = ["toc", "history", "ai"];
+
+/** Secondary panels — available via ActivityBar / CmdK, added to a dock when opened. */
+export const SECONDARY_AUX_PANELS: PanelId[] = [
   "backlinks",
-  "toc",
+  "tags",
+  "query",
   "calendar",
 ];
 
 export const DEFAULT_DOCK: DockLayout = {
   left: { panels: ["vault"], active: "vault", size: 240 },
-  right: { panels: DEFAULT_AUX_PANELS, active: "history", size: 270 },
+  right: { panels: [...DEFAULT_AUX_PANELS], active: "toc", size: 270 },
   bottom: { panels: [], active: null, size: 220 },
 };
 

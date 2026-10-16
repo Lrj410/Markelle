@@ -24,20 +24,26 @@ export function ConfirmDialog() {
   useEffect(() => subscribeConfirm(() => bump((n) => n + 1)), []);
 
   const pending = getConfirmPending();
+  const kind = pending?.kind ?? "warning";
+  const destructive = kind === "error" || kind === "warning";
 
   useModalFocusTrap({
     active: Boolean(pending),
     containerRef: panelRef,
     onEscape: () => resolveConfirm(false),
-    initialFocusSelector: ".btn.primary, .btn.danger",
+    // Prefer cancel for destructive confirms so Enter cannot wipe data by accident.
+    initialFocusSelector: destructive
+      ? ".btn.confirm-cancel, .btn.ghost"
+      : ".btn.primary, .btn.danger",
   });
 
   useEffect(() => {
     if (!pending) return;
+    // Skip global Enter→OK for destructive dialogs (must click explicitly).
+    if (destructive) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Enter") {
         const target = e.target as HTMLElement | null;
-        // Let the focused button handle Enter; only default-confirm otherwise.
         if (target?.closest?.("button")) return;
         e.preventDefault();
         resolveConfirm(true);
@@ -45,11 +51,9 @@ export function ConfirmDialog() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [pending]);
+  }, [pending, destructive]);
 
   if (!pending) return null;
-
-  const kind = pending.kind ?? "warning";
 
   return (
     <div
@@ -71,14 +75,19 @@ export function ConfirmDialog() {
         </div>
         <div className="confirm-body">
           <div className="modal-kicker">{kindLabel(kind)}</div>
-          <h2 id={titleId}>{pending.title ?? "Markelle"}</h2>
+          <h2 id={titleId}>{pending.title ?? t("common.brand")}</h2>
           <p id={`${titleId}-msg`} className="confirm-message">
             {pending.message}
           </p>
         </div>
         <div className="confirm-actions">
           {!pending.hideCancel && (
-            <button type="button" className="btn ghost" onClick={() => resolveConfirm(false)}>
+            <button
+              type="button"
+              className="btn ghost confirm-cancel"
+              onClick={() => resolveConfirm(false)}
+              autoFocus={destructive}
+            >
               {pending.cancelLabel ?? t("common.cancel")}
             </button>
           )}
@@ -86,7 +95,7 @@ export function ConfirmDialog() {
             type="button"
             className={kind === "error" ? "btn danger" : "btn primary"}
             onClick={() => resolveConfirm(true)}
-            autoFocus
+            autoFocus={!destructive || pending.hideCancel}
           >
             {pending.okLabel ?? t("common.confirm")}
           </button>

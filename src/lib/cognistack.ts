@@ -1,6 +1,7 @@
 /**
  * CogniStack Context & Memory Fusion Engine HTTP Client.
  * Connects to CogniStack gateway (default: http://127.0.0.1:7331).
+ * Updated for CogniStack 1.4.0 (Full support for /v1/prepare, /v1/fit, /v1/health, lore, vector, budget & prefix stability).
  */
 
 import { getVersion } from "@tauri-apps/api/app";
@@ -23,12 +24,58 @@ export interface CogniStackDialogueItem {
   content: string;
 }
 
+export interface CogniStackProfile {
+  name?: string;
+  description?: string;
+  personality?: string;
+  scenario?: string;
+  system_prompt?: string;
+}
+
+export interface CogniStackLoreEntry {
+  id?: string;
+  name?: string;
+  keys?: string[];
+  secondaryKeys?: string[];
+  content: string;
+  enabled?: boolean;
+  constant?: boolean;
+  insertionOrder?: number;
+}
+
+export interface CogniStackVectorHit {
+  name?: string;
+  content: string;
+  score?: number;
+}
+
+export interface CogniStackBudget {
+  contextLimit?: number;
+  completionReserve?: number;
+  softTrimTokenCap?: number;
+  softTrimEnabled?: boolean;
+  hardFit?: number;
+  safetyPad?: number;
+  templateOverhead?: number;
+  warnings?: string[];
+}
+
+export interface CogniStackPrefixStability {
+  ratio?: number;
+  unchangedTokens?: number;
+  priorTokens?: number;
+  currentTokens?: number;
+}
+
 export interface CogniStackPrepareOptions {
   url?: string;
   apiKey?: string;
   /** Reuse LAN allowlist from AI settings (default false = loopback only). */
   allowLan?: boolean;
   dialogue: CogniStackDialogueItem[];
+  profile?: CogniStackProfile;
+  loreEntries?: CogniStackLoreEntry[];
+  vectorHits?: CogniStackVectorHit[];
   summaryBlocks?: SummaryBlock[];
   summarizedCount?: number;
   summarizedThroughMessageId?: string | null;
@@ -37,6 +84,7 @@ export interface CogniStackPrepareOptions {
   contextTokenLimit?: number;
   completionReserveTokens?: number;
   charsPerToken?: number;
+  cacheScope?: string;
   signal?: AbortSignal;
 }
 
@@ -45,6 +93,10 @@ export interface CogniStackPrepareResult {
   engine?: string;
   version?: string;
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  promptTokens?: number;
+  promptChars?: number;
+  loreInjected?: Array<{ id: string; name?: string }>;
+  prefixStability?: CogniStackPrefixStability;
   shouldSummarize: boolean;
   compressReason?: string;
   summary?: string;
@@ -53,9 +105,45 @@ export interface CogniStackPrepareResult {
   toSummarizePairCount?: number;
   nextSummarizedCount?: number;
   nextSummarizedThroughMessageId?: string | null;
-  budget?: Record<string, unknown>;
+  budget?: CogniStackBudget;
   warnings?: string[];
   emergencyDroppedCount?: number;
+  error?: string;
+}
+
+export interface CogniStackFitOptions {
+  url?: string;
+  apiKey?: string;
+  allowLan?: boolean;
+  model?: string;
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  contextTokenLimit?: number;
+  completionReserveTokens?: number;
+  cacheScope?: string;
+  signal?: AbortSignal;
+}
+
+export interface CogniStackFitResult {
+  ok: boolean;
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  promptTokens?: number;
+  hardFit?: number;
+  trimmed?: boolean;
+  model?: string;
+  shouldSummarize?: boolean;
+  error?: string;
+}
+
+export interface CogniStackHealthResult {
+  ok: boolean;
+  version?: string;
+  engine?: string;
+  zone?: string;
+  uptimeMs?: number;
+  prepareQueue?: number;
+  rateLimit?: number;
+  lore?: string;
+  auth?: boolean;
   error?: string;
 }
 
@@ -66,6 +154,31 @@ export const COGNISTACK_MEMORY_COLUMNS = [
   "【未决】",
   "【近期情节】",
 ] as const;
+
+export const MEMORY_COLUMN_ALIASES: Record<
+  (typeof COGNISTACK_MEMORY_COLUMNS)[number],
+  string[]
+> = {
+  "【硬事实】": ["【长期事实】", "【核心事实】", "【确定事实】", "【事实】", "【设定】"],
+  "【时间线】": ["【事件时间线】", "【时间线记录】", "【大事记】", "【发生的事】"],
+  "【关系与称呼】": ["【人物关系】", "【关系】", "【称呼】"],
+  "【未决】": ["【未决事项】", "【待决】", "【悬而未决】", "【开放问题】"],
+  "【近期情节】": ["【最近情节】", "【近期剧情】", "【最近剧情】", "【当前情节】"],
+};
+
+export function canonicalColumnTitle(
+  title: string,
+): (typeof COGNISTACK_MEMORY_COLUMNS)[number] | null {
+  const tStr = (title ?? "").trim();
+  if (!tStr) return null;
+  if ((COGNISTACK_MEMORY_COLUMNS as readonly string[]).includes(tStr)) {
+    return tStr as (typeof COGNISTACK_MEMORY_COLUMNS)[number];
+  }
+  for (const canonical of COGNISTACK_MEMORY_COLUMNS) {
+    if (MEMORY_COLUMN_ALIASES[canonical].includes(tStr)) return canonical;
+  }
+  return null;
+}
 
 export function formatCogniStackTranscript(
   items: Array<{ role: string; content: string }>,
@@ -97,6 +210,7 @@ export function buildCogniStackSummarizePrompt(params: {
     params.transcript,
     "",
     "硬性要求：保留旧摘要与本批对话中的关键事实、知识要点与未决事项。整份替换旧记忆，不要另起碎段，不要用 --- 分隔，不要输出 markdown 标题。",
+    "特别要求：【硬事实】只记录提炼出的客观实体信息、设定与核心知识结论，严禁把临时的提问行为（例如‘用户问了测试’、‘用户让总结’、‘输入了1’）作为硬事实记录。",
     `篇幅：控制在约 ${hint} 字以内；超长则合并去重，优先压缩【近期情节】，不得丢失【硬事实】与【未决】。`,
     "栏目质量：每个栏目要么写实质内容，要么单独一行写「无」。",
     "只输出栏目正文，不要解释。",
@@ -107,8 +221,42 @@ function emptyFivePartSummary(): string {
   return COGNISTACK_MEMORY_COLUMNS.map((col) => `${col}\n无`).join("\n\n");
 }
 
+function matchHeaderLine(
+  rawLine: string,
+): { col: (typeof COGNISTACK_MEMORY_COLUMNS)[number]; rest: string } | null {
+  const line = rawLine.trim();
+  if (!line) return null;
+  const noHash = line.replace(/^#{1,6}\s*/, "").trim();
+
+  for (const col of COGNISTACK_MEMORY_COLUMNS) {
+    const candidates = [col, ...MEMORY_COLUMN_ALIASES[col]];
+    for (const cand of candidates) {
+      const bare = cand.replace(/[[\]【】［］()（）]/g, "");
+      const patterns = [
+        cand,
+        `[${bare}]`,
+        `［${bare}］`,
+        `(${bare})`,
+        `（${bare}）`,
+        bare,
+      ];
+      for (const p of patterns) {
+        if (noHash.startsWith(p)) {
+          const rest = noHash.slice(p.length).replace(/^[:：\-—\s]+/, "").trim();
+          if (p === bare && !line.startsWith("#") && rest.length > 0) {
+            continue;
+          }
+          return { col, rest };
+        }
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Normalize LLM memory text into the fixed five-column CogniStack layout.
+ * Supports CogniStack 1.4.0 column aliases, markdown headers, and bracket variations.
  */
 export function normalizeCogniStackSummaryColumns(body: string): string {
   const text = (body || "").trim();
@@ -122,11 +270,10 @@ export function normalizeCogniStackSummaryColumns(body: string): string {
 
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trimEnd();
-    const hit = COGNISTACK_MEMORY_COLUMNS.find((col) => line.startsWith(col));
+    const hit = matchHeaderLine(line);
     if (hit) {
-      current = hit;
-      const rest = line.slice(hit.length).trim();
-      if (rest) sections[hit].push(rest);
+      current = hit.col;
+      if (hit.rest) sections[hit.col].push(hit.rest);
       continue;
     }
     if (current) {
@@ -169,7 +316,7 @@ export async function cogniStackCheckHealth(
   url = "http://127.0.0.1:7331",
   apiKey = "",
   allowLan = false,
-): Promise<{ ok: boolean; version?: string; error?: string }> {
+): Promise<CogniStackHealthResult> {
   try {
     const base = resolveCogniBase(url, allowLan);
     const headers: Record<string, string> = {};
@@ -187,13 +334,52 @@ export async function cogniStackCheckHealth(
       });
 
       if (!res.ok) {
+        if (res.status === 404) {
+          const v1Res = await fetch(`${base}/v1`, {
+            method: "GET",
+            headers,
+            signal: ctrl.signal,
+          });
+          if (v1Res.ok) {
+            const v1Data = (await v1Res.json()) as {
+              name?: string;
+              version?: string;
+              zone?: string;
+              lore?: string;
+            };
+            return {
+              ok: true,
+              version: v1Data.version || "1.4.0",
+              engine: v1Data.name || "CogniStack",
+              zone: v1Data.zone,
+              lore: v1Data.lore,
+            };
+          }
+        }
         return { ok: false, error: `HTTP ${res.status}: ${res.statusText}` };
       }
 
-      const data = (await res.json()) as { ok?: boolean; version?: string };
+      const data = (await res.json()) as {
+        ok?: boolean;
+        version?: string;
+        engine?: string;
+        zone?: string;
+        uptimeMs?: number;
+        prepareQueue?: number;
+        rateLimit?: number;
+        lore?: string;
+        auth?: boolean;
+      };
       return {
         ok: Boolean(data.ok ?? true),
-        version: data.version || "1.0.0",
+        version: data.version || "1.4.0",
+        engine: data.engine || "cognistack-engine",
+        zone: data.zone,
+        uptimeMs: data.uptimeMs,
+        prepareQueue: data.prepareQueue,
+        rateLimit: data.rateLimit,
+        lore: data.lore,
+        auth: data.auth,
       };
     } finally {
       clearTimeout(timer);
@@ -231,8 +417,6 @@ export async function cogniStackPrepare(
     headers["Authorization"] = `Bearer ${opts.apiKey.trim()}`;
   }
 
-  // Report the real app version to the gateway (falls back to empty string in
-  // web preview / non-Tauri contexts where getVersion() rejects).
   let hostVersion = "";
   try {
     hostVersion = await getVersion();
@@ -240,12 +424,16 @@ export async function cogniStackPrepare(
     /* non-Tauri / web preview */
   }
 
-  const body = {
+  const body: Record<string, unknown> = {
     host: {
       id: "markelle",
       name: "Markelle",
       kind: "client",
       version: hostVersion,
+    },
+    profile: opts.profile || {
+      name: "Markelle AI",
+      description: "本地优先 Markdown 知识库助手",
     },
     dialogue: opts.dialogue,
     summaryBlocks: opts.summaryBlocks,
@@ -259,6 +447,16 @@ export async function cogniStackPrepare(
     completionReserveTokens: opts.completionReserveTokens || 1024,
     charsPerToken: opts.charsPerToken,
   };
+
+  if (opts.loreEntries && opts.loreEntries.length > 0) {
+    body.loreEntries = opts.loreEntries;
+  }
+  if (opts.vectorHits && opts.vectorHits.length > 0) {
+    body.vectorHits = opts.vectorHits;
+  }
+  if (opts.cacheScope) {
+    body.cacheScope = opts.cacheScope;
+  }
 
   try {
     const res = await fetch(`${base}/v1/prepare`, {
@@ -285,6 +483,10 @@ export async function cogniStackPrepare(
       engine?: string;
       version?: string;
       messages?: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+      promptTokens?: number;
+      promptChars?: number;
+      loreInjected?: Array<{ id: string; name?: string }>;
+      prefixStability?: CogniStackPrefixStability;
       summary?: string;
       summaryBlocks?: SummaryBlock[];
       memory?: {
@@ -295,7 +497,7 @@ export async function cogniStackPrepare(
       toSummarizePairCount?: number;
       nextSummarizedCount?: number;
       nextSummarizedThroughMessageId?: string;
-      budget?: Record<string, unknown>;
+      budget?: CogniStackBudget;
       warnings?: string[];
       diagnostics?: Record<string, unknown>;
     };
@@ -318,6 +520,10 @@ export async function cogniStackPrepare(
       engine: data.engine,
       version: data.version,
       messages: data.messages && data.messages.length > 0 ? data.messages : opts.dialogue,
+      promptTokens: data.promptTokens,
+      promptChars: data.promptChars,
+      loreInjected: data.loreInjected,
+      prefixStability: data.prefixStability,
       shouldSummarize: Boolean(data.memory?.shouldSummarize),
       compressReason: data.memory?.compressReason,
       summary: data.summary,
@@ -338,5 +544,65 @@ export async function cogniStackPrepare(
       shouldSummarize: false,
       error: t("ailib.gatewayCallFailed", { error: msg }),
     };
+  }
+}
+
+export async function cogniStackFit(
+  opts: CogniStackFitOptions,
+): Promise<CogniStackFitResult> {
+  let base: string;
+  try {
+    base = resolveCogniBase(opts.url || "http://127.0.0.1:7331", opts.allowLan ?? false);
+  } catch (err: unknown) {
+    return { ok: false, messages: opts.messages, error: String(err) };
+  }
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (opts.apiKey?.trim()) {
+    headers["Authorization"] = `Bearer ${opts.apiKey.trim()}`;
+  }
+
+  try {
+    const res = await fetch(`${base}/v1/fit`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        messages: opts.messages,
+        model: opts.model || "gpt-4o",
+        contextTokenLimit: opts.contextTokenLimit,
+        completionReserveTokens: opts.completionReserveTokens,
+        cacheScope: opts.cacheScope,
+      }),
+      signal: opts.signal,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      return {
+        ok: false,
+        messages: opts.messages,
+        error: `HTTP ${res.status}: ${errText || res.statusText}`,
+      };
+    }
+
+    const data = (await res.json()) as {
+      messages?: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+      promptTokens?: number;
+      hardFit?: number;
+      trimmed?: boolean;
+      model?: string;
+      shouldSummarize?: boolean;
+    };
+    return {
+      ok: true,
+      messages: data.messages || opts.messages,
+      promptTokens: data.promptTokens,
+      hardFit: data.hardFit,
+      trimmed: data.trimmed,
+      model: data.model,
+      shouldSummarize: data.shouldSummarize,
+    };
+  } catch (err: unknown) {
+    return { ok: false, messages: opts.messages, error: String(err) };
   }
 }

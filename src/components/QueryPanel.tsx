@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import { queryVault, type QueryHit } from "../lib/vault";
 import { t } from "../lib/i18n";
 import { useLocale } from "../hooks/useLocale";
+import { EmptyState } from "./ui/EmptyState";
 
 interface Props {
   vaultRoot: string | null;
@@ -68,14 +69,14 @@ export function QueryPanel({ vaultRoot, onOpenFile }: Props) {
 
   if (!vaultRoot) {
     return (
-      <aside className="query-panel backlinks-panel dock-fill" aria-label={t("panel.query")}>
-        <p className="backlinks-empty">{t("vault.needOpen")}</p>
+      <aside className="query-panel panel-shell dock-fill" aria-label={t("panel.query")}>
+        <EmptyState>{t("vault.needOpen")}</EmptyState>
       </aside>
     );
   }
 
   return (
-    <aside className="query-panel backlinks-panel dock-fill" aria-label={t("panel.query")}>
+    <aside className="query-panel panel-shell dock-fill" aria-label={t("panel.query")}>
       <form className="query-form" onSubmit={onSubmit}>
         <input
           type="search"
@@ -89,16 +90,20 @@ export function QueryPanel({ vaultRoot, onOpenFile }: Props) {
           {t("query.run")}
         </button>
       </form>
-      <p className="query-hint backlinks-empty quiet">{t("query.hint")}</p>
-      {error && <p className="backlinks-empty">{error}</p>}
-      {loading && <p className="backlinks-empty quiet">…</p>}
+      <p className="query-hint panel-empty quiet">{t("query.hint")}</p>
+      {error && <EmptyState>{error}</EmptyState>}
+      {loading && (
+        <EmptyState quiet busy>
+          {t("common.loading")}
+        </EmptyState>
+      )}
       {!loading && !error && ran && hits.length === 0 && (
-        <p className="backlinks-empty">{t("cmd.empty")}</p>
+        <EmptyState>{t("query.empty")}</EmptyState>
       )}
       {hits.length > 0 && (
-        <div className="backlinks-head">
+        <div className="panel-list-head">
           {t("panel.query")}
-          {loading ? "…" : ` · ${hits.length}`}
+          {loading ? ` · ${t("common.loading")}` : ` · ${hits.length}`}
         </div>
       )}
       {hits.map((hit) => (

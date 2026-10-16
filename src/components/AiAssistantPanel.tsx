@@ -178,6 +178,15 @@ function IconNewNote({ size = 12 }: { size?: number }) {
   );
 }
 
+function IconPlus({ size = 13, className }: { size?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  );
+}
+
 function IconTrash({ size = 13 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -273,10 +282,21 @@ function AiAssistantPanelInner({
   const [cogniStatus, setCogniStatus] = useState<{
     tested: boolean;
     ok: boolean;
+    version?: string;
   }>({ tested: false, ok: false });
 
+  const [sessionId, setSessionId] = useState<string>(
+    () => "s-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6),
+  );
+
+  const [lastCogniTelemetry, setLastCogniTelemetry] = useState<{
+    promptTokens?: number;
+    prefixStabilityRatio?: number;
+    hardFit?: number;
+  } | null>(null);
+
   const [cogniMemoryCount, setCogniMemoryCount] = useState<number>(
-    () => getCogniStackSessionState().summaryBlocks.length,
+    () => getCogniStackSessionState(sessionId).summaryBlocks.length,
   );
   const [showMemoryModal, setShowMemoryModal] = useState(false);
 
@@ -397,7 +417,7 @@ function AiAssistantPanelInner({
         settings.ollamaAllowLan,
       ).then((res) => {
         if (active) {
-          setCogniStatus({ tested: true, ok: res.ok });
+          setCogniStatus({ tested: true, ok: res.ok, version: res.version });
         }
       });
     }
@@ -415,6 +435,22 @@ function AiAssistantPanelInner({
   ]);
 
   const activeDocName = activePath ? activePath.replace(/\\/g, "/").split("/").pop() : null;
+  const isTranscriptDoc = Boolean(
+    activeDocName?.startsWith("AI-") ||
+    activeContent.includes("aiTranscript: true") ||
+    activeContent.includes("ai-transcript: true"),
+  );
+
+  const prevPathRef = useRef<string | null>(activePath);
+  useEffect(() => {
+    if (prevPathRef.current !== activePath) {
+      prevPathRef.current = activePath;
+      if (isTranscriptDoc) {
+        setIncludeDoc(false);
+        onStatus?.(t("ai.transcriptDocNotice"));
+      }
+    }
+  }, [activePath, isTranscriptDoc, onStatus]);
 
   const handleStop = useCallback(() => {
     if (abortControllerRef.current) {
@@ -493,6 +529,7 @@ function AiAssistantPanelInner({
           activeDocContent: !embedSource && includeDoc ? activeContent : undefined,
           selectedText: !embedSource && sel ? sel : undefined,
           attachDocContext: !embedSource,
+          cacheScope: sessionId,
           signal: controller.signal,
         });
 
@@ -518,7 +555,16 @@ function AiAssistantPanelInner({
             prev.map((m) => (m.id === assistantMsgId ? { ...m, content: cleaned } : m)),
           );
         }
-        setServerStatus((prev) => ({ ...prev, ok: true }));
+        if (prep.engineUsed === "cognistack") {
+          setLastCogniTelemetry({
+            promptTokens: prep.promptTokens,
+            prefixStabilityRatio: prep.prefixStability?.ratio,
+            hardFit:
+              typeof prep.cogniStackResult?.budget?.hardFit === "number"
+                ? prep.cogniStackResult.budget.hardFit
+                : undefined,
+          });
+        }
 
         if (
           prep.engineUsed === "cognistack" &&
@@ -533,9 +579,10 @@ function AiAssistantPanelInner({
               prep.cogniStackResult.nextSummarizedThroughMessageId || null,
             nextSummarizedCount: prep.cogniStackResult.nextSummarizedCount || 0,
             toSummarizePairCount: prep.cogniStackResult.toSummarizePairCount,
+            cacheScope: sessionId,
             onStatus: (msg) => {
               onStatus?.(msg);
-              setCogniMemoryCount(getCogniStackSessionState().summaryBlocks.length);
+              setCogniMemoryCount(getCogniStackSessionState(sessionId).summaryBlocks.length);
             },
           });
         }
@@ -578,6 +625,7 @@ function AiAssistantPanelInner({
       activeContent,
       resolveSelection,
       cleanOutput,
+      sessionId,
       onStatus,
       onOpenSettings,
     ],
@@ -644,6 +692,26 @@ function AiAssistantPanelInner({
     void runPrompt(trimmed, trimmed, { embedSource: false });
   }, [input, generating, runPrompt]);
 
+  const handleNewChat = useCallback(() => {
+    if (generating && abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setGenerating(false);
+    }
+    setMessages([]);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // Ignore
+    }
+    clearCogniStackSessionState(sessionId);
+    const nextSessionId = "s-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6);
+    setSessionId(nextSessionId);
+    setCogniMemoryCount(0);
+    setLastCogniTelemetry(null);
+    onStatus?.(t("ai.newChatStarted"));
+  }, [generating, STORAGE_KEY, sessionId, onStatus]);
+
   const handleClearChat = useCallback(() => {
     setMessages([]);
     try {
@@ -651,17 +719,17 @@ function AiAssistantPanelInner({
     } catch {
       // Ignore
     }
-    clearCogniStackSessionState();
+    clearCogniStackSessionState(sessionId);
     setCogniMemoryCount(0);
     onStatus?.(t("ai.clearedMemory"));
-  }, [STORAGE_KEY, onStatus]);
+  }, [STORAGE_KEY, sessionId, onStatus]);
 
   const handleSaveWholeChat = useCallback(() => {
     if (!onCreateNote || messages.length === 0) return;
     const dateStr = new Date().toISOString().slice(0, 10);
     const timeStr = new Date().toTimeString().slice(0, 5).replace(":", "");
     const title = `AI-${dateStr}-${timeStr}`;
-    let mdContent = `# ${title}\n\n- ${new Date().toLocaleString()}\n- ${settings.aiEngineMode === "cognistack" ? "CogniStack" : "Markelle"}\n- ${settings.ollamaModel || t("ai.modelDefault")}\n\n---\n\n`;
+    let mdContent = `---\naiTranscript: true\ndate: ${new Date().toISOString()}\n---\n\n# ${title}\n\n- ${new Date().toLocaleString()}\n- ${settings.aiEngineMode === "cognistack" ? "CogniStack" : "Markelle"}\n- ${settings.ollamaModel || t("ai.modelDefault")}\n\n---\n\n`;
 
     for (const msg of messages) {
       if (msg.role === "user") {
@@ -778,7 +846,10 @@ function AiAssistantPanelInner({
                 title={
                   settings.aiEngineMode === "cognistack"
                     ? cogniStatus.ok
-                      ? t("ai.cogniOnline", { url: settings.cogniStackUrl })
+                      ? t("ai.cogniOnlineWithVer", {
+                          url: settings.cogniStackUrl,
+                          version: cogniStatus.version || "1.4.0",
+                        })
                       : t("ai.cogniOffline", { url: settings.cogniStackUrl })
                     : t("ai.builtinMemory")
                 }
@@ -823,6 +894,15 @@ function AiAssistantPanelInner({
           )}
         </div>
         <div className="ai-panel-header-actions">
+          <button
+            type="button"
+            className="ai-icon-btn"
+            onClick={handleNewChat}
+            title={t("ai.newChatTitle")}
+            aria-label={t("ai.newChatAria")}
+          >
+            <IconPlus size={14} />
+          </button>
           {messages.length > 0 && onCreateNote && (
             <button
               type="button"
@@ -890,7 +970,7 @@ function AiAssistantPanelInner({
               {hasLiveSelection
                 ? t("ai.citeSelection", { n: liveSelectionLen })
                 : activeDocName
-                ? t("ai.linkDoc", { name: activeDocName })
+                ? `${t("ai.linkDoc", { name: activeDocName })}${isTranscriptDoc ? ` [${t("ai.transcriptBadge")}]` : ""}`
                 : t("ai.includeDoc")}
             </span>
           </label>
@@ -964,7 +1044,14 @@ function AiAssistantPanelInner({
       )}
 
       {/* Chat Messages Stream */}
-      <div className="ai-chat-body" ref={chatScrollRef}>
+      <div
+        className="ai-chat-body"
+        ref={chatScrollRef}
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+        aria-busy={generating || undefined}
+      >
         {messages.length === 0 ? (
           <div className="ai-chat-placeholder">
             <div className="ai-placeholder-sparkle">
@@ -1211,6 +1298,22 @@ function AiAssistantPanelInner({
                 <span className="ai-memory-stat-value ai-memory-stat-mono">
                   {getCogniStackSessionState().summarizedThroughMessageId ||
                     t("ai.memoryWaterlineInit")}
+                </span>
+              </div>
+              <div className="ai-memory-stat-card">
+                <span className="ai-memory-stat-label">{t("ai.memoryStatTokens")}</span>
+                <span className="ai-memory-stat-value">
+                  {lastCogniTelemetry?.promptTokens != null
+                    ? lastCogniTelemetry.promptTokens.toLocaleString()
+                    : "—"}
+                </span>
+              </div>
+              <div className="ai-memory-stat-card">
+                <span className="ai-memory-stat-label">{t("ai.memoryStatPrefix")}</span>
+                <span className="ai-memory-stat-value">
+                  {lastCogniTelemetry?.prefixStabilityRatio != null
+                    ? `${Math.round(lastCogniTelemetry.prefixStabilityRatio * 100)}%`
+                    : "—"}
                 </span>
               </div>
             </div>

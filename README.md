@@ -4,7 +4,7 @@
 
 **English:** Markelle is a local-first, high-performance Markdown knowledge workspace. Open a folder as a vault — read, edit, graph, capture, and chat with your local LLM. No cloud sync.
 
-![version](https://img.shields.io/badge/version-0.1.0-0d9488)
+![version](https://img.shields.io/badge/version-0.1.3-0d9488)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![tauri](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)
 ![react](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
@@ -12,18 +12,16 @@
 
 | | |
 |---|---|
-| **当前版本** | `0.1.0` |
+| **当前版本** | `0.1.3` |
 | **仓库** | [github.com/Lrj410/Markelle](https://github.com/Lrj410/Markelle) |
-| **安装包** | [Releases](https://github.com/Lrj410/Markelle/releases) · `Markelle_0.1.0_x64-setup.exe` |
+| **安装包** | [Releases](https://github.com/Lrj410/Markelle/releases) · `Markelle_0.1.3_x64-setup.exe` |
 | **技术栈** | Tauri 2 · React 19 · TypeScript · Vite · Rust · CodeMirror 6 |
 | **变更记录** | [CHANGELOG.md](./CHANGELOG.md) |
 | **安全说明** | [SECURITY.md](./SECURITY.md) |
 
 ---
 
-## 
-
-## 能力一览（v0.1.0）
+## 能力一览（v0.1.3）
 
 ### 库与文件
 - 打开**知识库**（文件夹）或单个 `.md` / `.markdown` / `.mdown` / `.mkd`

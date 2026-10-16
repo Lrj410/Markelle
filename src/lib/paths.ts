@@ -69,3 +69,14 @@ export function allocateUniquePath(
   }
   return path;
 }
+
+/** Compute relative path from a root folder, falling back to basename if outside root. */
+export function toRelativePath(root: string, path: string): string {
+  const normRoot = toPosixPath(root).replace(/\/+$/, "").toLowerCase();
+  const normPath = toPosixPath(path);
+  if (normPath.toLowerCase().startsWith(normRoot + "/")) {
+    return normPath.slice(normRoot.length + 1);
+  }
+  return basename(path);
+}
+

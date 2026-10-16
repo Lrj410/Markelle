@@ -395,9 +395,12 @@ pub fn reject_overbroad_root(path: &Path) -> Result<(), String> {
     if first == "users" && normals.get(2).map(String::as_str) == Some("appdata") {
         return Err("拒绝将用户 AppData 目录注册为库".into());
     }
-    // `C:\Users\<user>`（macOS 的 `/Users/<user>` 同理）是用户主目录本身，含 `.ssh`、
-    // 浏览器数据等敏感内容，仅拦 AppData 不足以覆盖，按「两段式 users/xxx」显式拒绝。
-    if first == "users" && normals.len() == 2 {
+    // `C:\Users\<user>`（macOS 的 `/Users/<user>`、Linux 的 `/home/<user>` 或 `/root`）是用户主目录本身，含 `.ssh`、
+    // 浏览器数据等敏感内容，仅拦 AppData 不足以覆盖，显式拒绝整目录注册为库。
+    if (first == "users" || first == "home") && normals.len() == 2 {
+        return Err("拒绝将用户主目录注册为库".into());
+    }
+    if first == "root" && normals.len() == 1 {
         return Err("拒绝将用户主目录注册为库".into());
     }
 
@@ -602,8 +605,11 @@ mod tests {
         // 用户主目录本身过宽（.ssh、浏览器数据等），必须拒绝。
         assert!(reject_overbroad_root(Path::new("C:/Users/alice")).is_err());
         assert!(reject_overbroad_root(Path::new("/Users/alice")).is_err());
+        assert!(reject_overbroad_root(Path::new("/home/alice")).is_err());
+        assert!(reject_overbroad_root(Path::new("/root")).is_err());
         // 主目录下的具体项目目录仍然允许。
         assert!(reject_overbroad_root(Path::new("C:/Users/alice/notes")).is_ok());
+        assert!(reject_overbroad_root(Path::new("/home/alice/notes")).is_ok());
     }
 
     #[test]

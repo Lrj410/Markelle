@@ -41,7 +41,7 @@ export function PromptDialog() {
   return (
     <div
       className="modal-overlay confirm-overlay"
-      role="alertdialog"
+      role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
       aria-describedby={messageId}
@@ -58,7 +58,7 @@ export function PromptDialog() {
         </div>
         <div className="confirm-body">
           <div className="modal-kicker">{t("prompt.kicker")}</div>
-          <h2 id={titleId}>{pending.title ?? "Markelle"}</h2>
+          <h2 id={titleId}>{pending.title ?? t("common.brand")}</h2>
           <p id={messageId} className="confirm-message">
             {pending.message}
           </p>

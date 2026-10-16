@@ -406,6 +406,37 @@ function MarkdownViewInner({
       wrap.appendChild(table);
     });
 
+    root.querySelectorAll("pre").forEach((pre) => {
+      if (pre.dataset.mklCodeBound) return;
+      pre.dataset.mklCodeBound = "1";
+      if (pre.querySelector(".mermaid") || pre.classList.contains("mermaid")) return;
+
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "code-copy-btn";
+      copyBtn.setAttribute("aria-label", t("code.copy"));
+      copyBtn.innerText = t("code.copy");
+
+      copyBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const codeEl = pre.querySelector("code");
+        const codeText = (codeEl ? codeEl.innerText : pre.innerText).replace(/\r\n/g, "\n");
+        try {
+          await navigator.clipboard.writeText(codeText);
+          copyBtn.innerText = t("code.copied");
+          copyBtn.classList.add("copied");
+          window.setTimeout(() => {
+            copyBtn.innerText = t("code.copy");
+            copyBtn.classList.remove("copied");
+          }, 2000);
+        } catch {
+          /* clipboard write failed */
+        }
+      });
+
+      pre.appendChild(copyBtn);
+    });
+
     if (onTaskToggle) {
       root.querySelectorAll(".task-list-item input[type=checkbox]").forEach((el) => {
         const input = el as HTMLInputElement;

@@ -9,6 +9,7 @@ import {
 } from "../lib/history";
 import { computeLineDiff, type DiffLine } from "../lib/diff";
 import { useModalFocusTrap } from "../hooks/useModalFocusTrap";
+import { EmptyState } from "./ui/EmptyState";
 
 interface Props {
   vaultRoot: string | null;
@@ -75,23 +76,27 @@ export function HistoryPanel({
 
   if (!vaultRoot || !notePath) {
     return (
-      <aside className="backlinks-panel dock-fill" aria-label={t("panel.history")}>
-        <p className="backlinks-empty">{t("history.needNote")}</p>
+      <aside className="panel-shell dock-fill" aria-label={t("panel.history")}>
+        <EmptyState>{t("history.needNote")}</EmptyState>
       </aside>
     );
   }
 
   return (
-    <aside className="backlinks-panel dock-fill" aria-label={t("panel.history")}>
-      <div className="backlinks-head" style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+    <aside className="panel-shell dock-fill" aria-label={t("panel.history")}>
+      <div className="panel-list-head" style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
         <span>{t("panel.history")}</span>
         <button type="button" className="btn ghost" onClick={() => void refresh()} disabled={loading}>
           {t("history.refresh")}
         </button>
       </div>
-      {loading && <p className="backlinks-empty quiet">…</p>}
+      {loading && (
+        <EmptyState quiet busy>
+          {t("common.loading")}
+        </EmptyState>
+      )}
       {!loading && entries.length === 0 && (
-        <p className="backlinks-empty">{t("history.empty")}</p>
+        <EmptyState>{t("history.empty")}</EmptyState>
       )}
       {entries.map((entry) => (
         <button

@@ -164,11 +164,13 @@ export function PropertiesStrip({ docKey, source, onSourceChange }: Props) {
             />
           </label>
         ) : (
-          tags.slice(0, 8).map((tag) => (
-            <span key={`${docKey}:tag:${tag}`} className="props-tag">
-              #{tag}
-            </span>
-          ))
+          <>
+            {tags.map((tag) => (
+              <span key={`${docKey}:tag:${tag}`} className="props-tag">
+                #{tag}
+              </span>
+            ))}
+          </>
         )}
       </div>
     </div>
